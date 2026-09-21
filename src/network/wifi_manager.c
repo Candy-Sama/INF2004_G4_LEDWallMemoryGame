@@ -20,3 +20,7 @@ bool wifi_init_and_connect(void) {
     printf("Wi-Fi Connected.\n");
     return true;
 }
+
+bool is_wifi_connected() {
+    return cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP;
+}

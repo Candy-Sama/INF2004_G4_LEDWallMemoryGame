@@ -51,19 +51,44 @@ int main() {
         cyw43_arch_lwip_begin();
         init_mqtt_client("SE4_Pico_Node_1");
         cyw43_arch_lwip_end();
-    }
 
-    while (true) {
-        for (int i = 0; i < NUM_LEDS; ++i) {
-            put_pixel(urgb_u32(8, 0, 0)); 
+        printf("Waiting for initial MQTT handshake...\n");
+        while (!is_mqtt_connected()) {
+            sleep_ms(250); // Pause here until the connection finishes
+            cyw43_arch_poll(); // Keep processing background network tasks
         }
-        
-        // Publish test message
-        cyw43_arch_lwip_begin();
-        publish_message("se4/memorygame/node1", "Node 1 is active!");
-        cyw43_arch_lwip_end();
+}
 
+   while (true) {
+        // 1. Check Wi-Fi Health
+        if (!is_wifi_connected()) {
+            printf("Wi-Fi connection lost! Waiting for hotspot...\n");
+            // Optional: call wifi_init_and_connect() here if it supports auto-retries
+            sleep_ms(2000); 
+        } 
+        // 2. Check MQTT Health
+        else if (!is_mqtt_connected()) {
+            printf("MQTT disconnected! Reconnecting to HiveMQ...\n");
+            cyw43_arch_lwip_begin();
+            init_mqtt_client("SE4_Pico_Node_1");
+            cyw43_arch_lwip_end();
+            sleep_ms(2000); 
+        } 
+        // 3. Network is healthy. Safe to render and publish!
+        else {
+            // Render LED frame
+            for (int i = 0; i < NUM_LEDS; ++i) {
+                put_pixel(urgb_u32(5, 0, 5)); 
+            }
+            
+            // Publish test message
+            cyw43_arch_lwip_begin();
+            publish_message("se4/memorygame/node1", "Node 1 is active!");
+            cyw43_arch_lwip_end();
+        }
+
+        // Required background hardware polling
         cyw43_arch_poll(); 
-        sleep_ms(1000);
+        sleep_ms(1000); // Control the loop speed
     }
 }

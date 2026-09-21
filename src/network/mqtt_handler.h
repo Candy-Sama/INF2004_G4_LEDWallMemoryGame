@@ -3,8 +3,11 @@
 
 #include "lwip/apps/mqtt.h"
 #include "lwip/ip4_addr.h"
+#include <stdbool.h>
 
 void init_mqtt_client(const char* client_id);
 void publish_message(const char* topic, const char* payload);
+
+bool is_mqtt_connected();
 
 #endif

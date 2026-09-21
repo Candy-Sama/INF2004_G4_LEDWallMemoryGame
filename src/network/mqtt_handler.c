@@ -65,3 +65,7 @@ void publish_message(const char* topic, const char* payload) {
         }
     }
 }
+
+bool is_mqtt_connected() {
+    return (mqtt_client != NULL && mqtt_client_is_connected(mqtt_client));
+}
