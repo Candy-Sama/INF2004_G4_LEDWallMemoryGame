@@ -1,2 +1,5 @@
 build
 !.vscode/*
+
+# Ignore local Wi-Fi credentials
+config/wifi_creds.h
