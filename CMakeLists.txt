@@ -38,6 +38,7 @@ pico_sdk_init()
 add_executable(LED_MEMORY_GAME 
     src/main.c
     src/display/ledmatrix.c
+    src/display/imagedata.c
     src/gameengine/core.c
     src/gameengine/memory.c
     src/network/mqtt_handler.c
@@ -84,3 +85,16 @@ pico_add_extra_outputs(LED_MEMORY_GAME)
 
 pico_enable_stdio_usb(LED_MEMORY_GAME 1)
 pico_enable_stdio_uart(LED_MEMORY_GAME 0)
+
+# == THIS IS TO TEST THE DISPLAY  ======================================================
+add_executable(display_test
+src/display/display_test.c
+src/display/ledmatrix.c
+src/display/imagedata.c)
+target_include_directories(display_test PRIVATE src/display)
+target_link_libraries(display_test pico_stdlib hardware_pio hardware_dma)
+pico_generate_pio_header(display_test ${CMAKE_CURRENT_LIST_DIR}/src/display/ws2812.pio)
+pico_add_extra_outputs(display_test)
+pico_enable_stdio_usb(display_test 1)
+pico_enable_stdio_uart(display_test 0)
+# ====================================================================================
