@@ -5,8 +5,15 @@
 #define NODE_ID 1
 
 // 1 enables the one-shot demo on node 1 only; 0 disables it on all nodes.
-#define ENABLE_PEER_TEST 1
+#define ENABLE_PEER_TEST 0
 #define PEER_NODE_ID 2
+
+// Desk movement demo: only node 1 sends commands to PEER_NODE_ID.
+#define ENABLE_MOTION_TEST 1
+#define MOTION_THRESHOLD_MG 250
+#define MOTION_RELEASE_MG 80
+#define MOTION_QUIET_MS 200
+#define MOTION_COOLDOWN_MS 800
 
 #if NODE_ID < 1 || NODE_ID > 6
 #error "NODE_ID must be between 1 and 6"

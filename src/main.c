@@ -8,6 +8,7 @@
 #include "ws2812.pio.h" 
 #include "mqtt_handler.h"
 #include "imudriver.h"
+#include "motion_detector.h"
 #include "wifi_manager.h" // Added your new Wi-Fi module
 
 #define LED_PIN 2       
@@ -68,6 +69,13 @@ int main() {
     bool display_dirty = true;
     absolute_time_t next_publish = get_absolute_time();
     absolute_time_t next_imu_print = get_absolute_time();
+    absolute_time_t next_imu_read = get_absolute_time();
+#if ENABLE_MOTION_TEST && NODE_ID == 1
+    motion_detector_t motion = {0};
+    bool send_green_next = true;
+    printf("Motion demo: hold sensor still, then move it briefly. Target: %s\n",
+           MQTT_PEER_COMMAND_TOPIC);
+#endif
 #if ENABLE_PEER_TEST && NODE_ID == 1
     bool peer_test_started = false;
     bool peer_test_sent = false;
@@ -75,19 +83,48 @@ int main() {
 #endif
 
    while (true) {
-        // Diagnostic readings stay separate from MQTT and LED commands.
-        if (imu_available && time_reached(next_imu_print)) {
+        // Read frequently to catch movement; print only twice a second.
+        if (imu_available && time_reached(next_imu_read)) {
             imu_acceleration_t acceleration;
             imu_read_result_t result = imu_read_acceleration(&acceleration);
+            next_imu_read = make_timeout_time_ms(10);
             if (result == IMU_NEW_DATA) {
-                printf("Node %d IMU: X=%d mg Y=%d mg Z=%d mg\n", NODE_ID,
-                       acceleration.x_mg, acceleration.y_mg, acceleration.z_mg);
+#if ENABLE_MOTION_TEST && NODE_ID == 1
+                if (motion_detector_update(&motion, acceleration.x_mg,
+                                           acceleration.y_mg, acceleration.z_mg,
+                                           to_ms_since_boot(get_absolute_time()))) {
+                    if (is_wifi_connected() && is_mqtt_connected()) {
+                        const char *colour = send_green_next ? "GREEN" : "RED";
+                        cyw43_arch_lwip_begin();
+                        bool queued = publish_message(MQTT_PEER_COMMAND_TOPIC, colour);
+                        cyw43_arch_lwip_end();
+                        if (queued) {
+                            printf("Movement detected: queued %s to %s\n", colour,
+                                   MQTT_PEER_COMMAND_TOPIC);
+                            send_green_next = !send_green_next;
+                        } else {
+                            printf("Movement detected, but publish failed. Try again.\n");
+                        }
+                    } else {
+                        printf("Movement ignored: network is disconnected.\n");
+                    }
+                }
+#endif
+                if (time_reached(next_imu_print)) {
+                    printf("Node %d IMU: X=%d mg Y=%d mg Z=%d mg\n", NODE_ID,
+                           acceleration.x_mg, acceleration.y_mg, acceleration.z_mg);
+                    next_imu_print = make_timeout_time_ms(500);
+                }
             } else if (result == IMU_READ_ERROR) {
                 printf("IMU: read failed; check connections. Will retry.\n");
-            } else {
+                next_imu_read = make_timeout_time_ms(500);
+#if ENABLE_MOTION_TEST && NODE_ID == 1
+                motion.initialised = false;
+#endif
+            } else if (time_reached(next_imu_print)) {
                 printf("IMU: waiting for fresh acceleration data.\n");
+                next_imu_print = make_timeout_time_ms(500);
             }
-            next_imu_print = make_timeout_time_ms(500);
         }
         // 1. Check Wi-Fi Health
         if (!is_wifi_connected()) {
