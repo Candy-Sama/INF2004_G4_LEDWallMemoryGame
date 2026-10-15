@@ -104,7 +104,8 @@ static void apply_received_command(void) {
 static void publish_status(void) {
     static absolute_time_t next_publish;
     if (time_reached(next_publish)) {
-        mqtt_send(MQTT_STATUS_TOPIC, MQTT_STATUS_MESSAGE, strlen(MQTT_STATUS_MESSAGE));
+        mqtt_send_ex(MQTT_PRESENCE_TOPIC, MQTT_STATUS_MESSAGE,
+                     strlen(MQTT_STATUS_MESSAGE), 1, true, NULL, NULL);
         next_publish = make_timeout_time_ms(1000);
     }
 }
@@ -130,6 +131,12 @@ int main(void) {
 
     if (!wifi_init_and_connect(WIFI_SSID, WIFI_PASSWORD)) {
         printf("Wi-Fi setup failed. Check credentials/network and restart.\n");
+        return 1;
+    }
+    // Broker publishes retained 'offline' if this connection disappears.
+    // 'online' only means transport available, not game-state synchronised.
+    if (!mqtt_configure_will(MQTT_PRESENCE_TOPIC, "offline", 10)) {
+        printf("Could not configure MQTT Last Will.\n");
         return 1;
     }
     // The application supplies the topic. The identity/layout module can supply

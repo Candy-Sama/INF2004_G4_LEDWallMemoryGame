@@ -1,5 +1,18 @@
 # MQTT framework and two-board demo
 
+## MQTT feedback update
+
+Start with the beginner-friendly [protocol and ownership guide](docs/MQTT_PROTOCOL.md)
+and [local broker walkthrough](docs/LOCAL_BROKER.md). The transport now supports
+QoS 0/1 subscriptions and publishing, retained publishing, copied Last Will
+configuration, and optional publish completion callbacks. The existing demo
+announces retained online/offline presence; full game recovery is a documented
+integration contract, not implemented game behaviour.
+
+Set `MQTT_BROKER_HOST` in `config/network_config.h` to your local broker PC's
+address before flashing. Its default local hostname is a deployment placeholder.
+The public HiveMQ broker is no longer the default.
+
 The network module transports messages. It does not assign board identities,
 construct application topics, interpret game events or choose LED colours.
 The identity/layout owner supplies complete topics; application modules decide
@@ -90,7 +103,9 @@ that topic is accepted. Re-registering the same topic is harmless.
 
 `mqtt_send(topic, payload, length)` returning true means the message was queued
 locally. It does not prove the broker or another board processed it. Publishing
-uses QoS 0 and retain=false. The receiver must already be subscribed.
+uses QoS 0 and retain=false. `mqtt_send_ex` additionally supports QoS 1, retain
+and a completion callback. `mqtt_subscribe_topic_qos` selects subscription QoS.
+The receiver must already be subscribed for an unretained message.
 `mqtt_receive(&message)` removes the oldest complete message and copies it into
 caller-owned storage. It returns false for an empty queue or NULL destination.
 
@@ -120,10 +135,11 @@ messages are cleared on disconnect so old demo/game actions are not replayed.
 Topics exceeding lwIP's own receive-header buffer may be rejected by the library
 before reaching the framework; teammates should respect the documented limits.
 
-This is not yet the full network statechart: QoS 1 acknowledgements, an outgoing
-queue, application delivery replies, Wi-Fi rejoin logic, node discovery and
-state resynchronisation are future work. The status demo is not a missing-board
-detector. The caller decides whether failed/stale game messages should be retried.
+This is not yet the full network statechart: an outgoing application queue,
+application delivery replies, Wi-Fi rejoin logic, node discovery and state
+resynchronisation are future work. QoS 1 completion reports broker acknowledgement,
+not display application. Last Will reports loss after the broker detects it;
+the demo does not monitor all required boards or pause gameplay.
 
 ## Code map
 

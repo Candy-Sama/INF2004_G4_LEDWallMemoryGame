@@ -12,11 +12,15 @@
 
 typedef struct {
     char topic[MQTT_TOPIC_MAX_LENGTH + 1];
+    uint8_t qos;
     bool active;
 } subscription_t;
 
 static mqtt_client_t *client;
 static struct mqtt_connect_client_info_t client_info;
+static char will_topic[MQTT_TOPIC_MAX_LENGTH + 1];
+static char will_payload[MQTT_PAYLOAD_MAX_LENGTH + 1];
+static uint16_t keep_alive_seconds = 30;
 static bool connection_pending;
 static bool attempted;
 static u32_t last_attempt_ms;
@@ -116,7 +120,7 @@ static void service_subscriptions(void) {
     for (size_t i = 0; i < subscription_count; ++i) {
         if (subscriptions[i].active) continue;
         subscription_pending = true;
-        err_t result = mqtt_subscribe(client, subscriptions[i].topic, 0,
+        err_t result = mqtt_subscribe(client, subscriptions[i].topic, subscriptions[i].qos,
                                      subscription_cb, &subscriptions[i]);
         if (result != ERR_OK) {
             subscription_pending = false;
@@ -150,7 +154,7 @@ static void mqtt_connection_cb(mqtt_client_t *mqtt, void *arg, mqtt_connection_s
 
 static void connect_to_broker(const ip_addr_t *address, const char *client_id) {
     client_info.client_id = client_id;
-    client_info.keep_alive = 30;
+    client_info.keep_alive = keep_alive_seconds;
     printf("Connecting to %s:%d as %s...\n", ipaddr_ntoa(address), MQTT_BROKER_PORT, client_id);
     err_t result = mqtt_client_connect(client, address, MQTT_BROKER_PORT,
                                       mqtt_connection_cb, NULL, &client_info);
@@ -201,18 +205,42 @@ void init_mqtt_client(const char *client_id) {
     cyw43_arch_lwip_end();
 }
 
+bool mqtt_configure_will(const char *topic, const char *payload, uint16_t keep_alive) {
+    if (!valid_topic(topic, false) || payload == NULL ||
+        strlen(payload) > MQTT_PAYLOAD_MAX_LENGTH || keep_alive == 0) return false;
+    cyw43_arch_lwip_begin();
+    bool accepted = !attempted;
+    if (accepted) {
+        strcpy(will_topic, topic);
+        strcpy(will_payload, payload);
+        keep_alive_seconds = keep_alive;
+        client_info.will_topic = will_topic;
+        client_info.will_msg = will_payload;
+        client_info.will_qos = 1;
+        client_info.will_retain = 1;
+    }
+    cyw43_arch_lwip_end();
+    return accepted;
+}
+
 bool mqtt_subscribe_topic(const char *topic) {
-    if (!valid_topic(topic, true)) return false;
+    return mqtt_subscribe_topic_qos(topic, 0);
+}
+
+bool mqtt_subscribe_topic_qos(const char *topic, uint8_t qos) {
+    if (!valid_topic(topic, true) || qos > 1) return false;
     cyw43_arch_lwip_begin();
     for (size_t i = 0; i < subscription_count; ++i) {
         if (strcmp(topic, subscriptions[i].topic) == 0) {
+            bool same_qos = subscriptions[i].qos == qos;
             cyw43_arch_lwip_end();
-            return true;
+            return same_qos;
         }
     }
     bool accepted = subscription_count < MQTT_MAX_SUBSCRIPTIONS;
     if (accepted) {
         strcpy(subscriptions[subscription_count].topic, topic);
+        subscriptions[subscription_count].qos = qos;
         subscriptions[subscription_count++].active = false;
     }
     cyw43_arch_lwip_end();
@@ -225,12 +253,19 @@ static void publish_cb(void *arg, err_t result) {
 }
 
 bool mqtt_send(const char *topic, const void *payload, size_t length) {
+    return mqtt_send_ex(topic, payload, length, 0, false, NULL, NULL);
+}
+
+bool mqtt_send_ex(const char *topic, const void *payload, size_t length,
+                  uint8_t qos, bool retain, mqtt_send_completion_t completion,
+                  void *context) {
     if (!valid_topic(topic, false) || length > MQTT_PAYLOAD_MAX_LENGTH ||
-        (length && payload == NULL)) return false;
+        (length && payload == NULL) || qos > 1) return false;
     cyw43_arch_lwip_begin();
     bool queued = false;
     if (client && mqtt_client_is_connected(client)) {
-        err_t result = mqtt_publish(client, topic, payload, (u16_t)length, 0, 0, publish_cb, NULL);
+        err_t result = mqtt_publish(client, topic, payload, (u16_t)length, qos, retain,
+                                   completion ? completion : publish_cb, context);
         queued = result == ERR_OK;
         if (!queued) printf("Could not queue publish: %d\n", result);
     }

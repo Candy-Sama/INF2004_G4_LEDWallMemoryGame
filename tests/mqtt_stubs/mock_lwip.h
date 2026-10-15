@@ -6,7 +6,7 @@
 typedef uint8_t u8_t;
 typedef uint16_t u16_t;
 typedef uint32_t u32_t;
-typedef int err_t;
+typedef int8_t err_t;
 #define ERR_OK 0
 #define ERR_MEM -1
 #define ERR_INPROGRESS -5
@@ -16,7 +16,12 @@ typedef int mqtt_connection_status_t;
 #define MQTT_CONNECT_DISCONNECTED 256
 typedef struct { int connected; } mqtt_client_t;
 typedef struct { int unused; } ip_addr_t;
-struct mqtt_connect_client_info_t { const char *client_id; u16_t keep_alive; };
+struct mqtt_connect_client_info_t {
+    const char *client_id;
+    u16_t keep_alive;
+    const char *will_topic, *will_msg;
+    u8_t will_qos, will_retain;
+};
 typedef void (*request_cb_t)(void *, err_t);
 typedef void (*connection_cb_t)(mqtt_client_t *, void *, mqtt_connection_status_t);
 typedef void (*publish_cb_t)(void *, const char *, u32_t);
