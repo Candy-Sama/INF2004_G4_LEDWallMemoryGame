@@ -38,8 +38,6 @@ pico_sdk_init()
 add_executable(LED_MEMORY_GAME 
     src/main.c
     src/display/ledmatrix.c
-    src/gameengine/core.c
-    src/gameengine/memory.c
     src/network/mqtt_handler.c
     src/network/wifi_manager.c
     src/sensors/imudriver.c
@@ -54,10 +52,6 @@ pico_generate_pio_header(LED_MEMORY_GAME ${CMAKE_CURRENT_LIST_DIR}/src/display/w
 # Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(LED_MEMORY_GAME 0)
 pico_enable_stdio_usb(LED_MEMORY_GAME 1)
-
-# Add the standard library to the build
-target_link_libraries(LED_MEMORY_GAME
-        pico_stdlib)
 
 # Add the standard include files to the build
 target_include_directories(LED_MEMORY_GAME PRIVATE
@@ -74,14 +68,9 @@ target_link_libraries(LED_MEMORY_GAME
     pico_stdlib
     hardware_i2c
     hardware_pio
-    hardware_dma
-    hardware_timer
     pico_unique_id
     pico_cyw43_arch_lwip_threadsafe_background
     pico_lwip_mqtt
 )
 
 pico_add_extra_outputs(LED_MEMORY_GAME)
-
-pico_enable_stdio_usb(LED_MEMORY_GAME 1)
-pico_enable_stdio_uart(LED_MEMORY_GAME 0)

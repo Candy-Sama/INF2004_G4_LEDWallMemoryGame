@@ -35,7 +35,7 @@ static bool write_register(uint8_t reg, uint8_t value) {
     uint8_t bytes[] = {reg, value};
     int result = i2c_write_timeout_us(imu_bus, ACCEL_ADDRESS, bytes,
                                     sizeof(bytes), false, I2C_TIMEOUT_US);
-    if (result != sizeof(bytes)) {
+    if (result != (int)sizeof(bytes)) {
         printf("IMU: register 0x%02X write failed (%d).\n", reg, result);
         return false;
     }

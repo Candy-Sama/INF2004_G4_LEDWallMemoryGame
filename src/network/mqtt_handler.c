@@ -1,7 +1,8 @@
 #include "mqtt_handler.h"
 #include <stdio.h>
 #include <string.h> 
-#include "lwip/dns.h" // Added DNS library
+#include "lwip/dns.h"
+#include "lwip/apps/mqtt.h"
 #include "lwip/sys.h"
 #include "pico/cyw43_arch.h"
 
@@ -80,7 +81,7 @@ static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection
     incoming_valid = false;
     pending_command = LED_COMMAND_NONE;
     if (status == MQTT_CONNECT_ACCEPTED) {
-        printf("Successfully connected to HiveMQ Public Broker!\n");
+        printf("MQTT connected to %s.\n", MQTT_BROKER_HOST);
         mqtt_set_inpub_callback(client, incoming_publish_cb, incoming_data_cb, NULL);
         // Subscribe again after every reconnect because sessions are clean.
         err_t err = mqtt_subscribe(client, MQTT_COMMAND_TOPIC, 0, subscription_cb, NULL);
@@ -104,8 +105,8 @@ static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection
 static void connect_to_broker(const ip_addr_t *ipaddr, const char* client_id) {
     ci.client_id = client_id; 
     ci.keep_alive = 30;
-    printf("Connecting to %s:1883 as %s...\n", ipaddr_ntoa(ipaddr), client_id);
-    err_t err = mqtt_client_connect(mqtt_client, ipaddr, 1883, mqtt_connection_cb, NULL, &ci);
+    printf("Connecting to %s:%d as %s...\n", ipaddr_ntoa(ipaddr), MQTT_BROKER_PORT, client_id);
+    err_t err = mqtt_client_connect(mqtt_client, ipaddr, MQTT_BROKER_PORT, mqtt_connection_cb, NULL, &ci);
     if (err != ERR_OK) {
         connection_pending = false;
         printf("Failed to initiate MQTT connection, lwIP error: %d\n", err);
@@ -124,7 +125,7 @@ static void dns_found_cb(const char *name, const ip_addr_t *ipaddr, void *callba
     }
 }
 
-void init_mqtt_client(const char* client_id) {
+static void start_connection(const char* client_id) {
     // Called under the lwIP lock. Allow only one DNS/connect attempt at a time.
     if (connection_pending || (mqtt_client && mqtt_client_is_connected(mqtt_client))) {
         return;
@@ -146,8 +147,7 @@ void init_mqtt_client(const char* client_id) {
     
     printf("Resolving MQTT broker domain...\n");
     
-    // Request the IP address for broker.hivemq.com
-    err_t err = dns_gethostbyname("broker.hivemq.com", &broker_ip, dns_found_cb, (void*)client_id);
+    err_t err = dns_gethostbyname(MQTT_BROKER_HOST, &broker_ip, dns_found_cb, (void*)client_id);
     
     if (err == ERR_OK) {
         // The IP was already in the Pico's cache, connect immediately
@@ -158,6 +158,12 @@ void init_mqtt_client(const char* client_id) {
     }
 }
 
+void init_mqtt_client(const char* client_id) {
+    cyw43_arch_lwip_begin();
+    start_connection(client_id);
+    cyw43_arch_lwip_end();
+}
+
 static void mqtt_pub_request_cb(void *arg, err_t result) {
     if(result != ERR_OK) {
         printf("Publish failed: %d\n", result);
@@ -165,17 +171,20 @@ static void mqtt_pub_request_cb(void *arg, err_t result) {
 }
 
 bool publish_message(const char* topic, const char* payload) {
+    bool queued = false;
+    cyw43_arch_lwip_begin();
     if (mqtt_client != NULL && mqtt_client_is_connected(mqtt_client)) {
         err_t err = mqtt_publish(mqtt_client, topic, payload, strlen(payload), 0, 0, mqtt_pub_request_cb, NULL);
         if(err != ERR_OK) {
             printf("Publish error: %d\n", err);
         }
-        return err == ERR_OK;
+        queued = err == ERR_OK;
     }
-    return false;
+    cyw43_arch_lwip_end();
+    return queued;
 }
 
-bool is_mqtt_connected() {
+bool is_mqtt_connected(void) {
     cyw43_arch_lwip_begin();
     bool connected = (mqtt_client != NULL && mqtt_client_is_connected(mqtt_client));
     cyw43_arch_lwip_end();

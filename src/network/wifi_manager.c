@@ -21,6 +21,6 @@ bool wifi_init_and_connect(void) {
     return true;
 }
 
-bool is_wifi_connected() {
+bool is_wifi_connected(void) {
     return cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP;
 }

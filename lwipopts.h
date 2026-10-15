@@ -59,9 +59,8 @@
 #define LWIP_DEBUG                  1
 #define LWIP_STATS                  1
 #define LWIP_STATS_DISPLAY          1
-// Diagnose connection failures beneath the application's generic status 256.
-// Disable MQTT_DEBUG after troubleshooting to reduce serial output.
-#define MQTT_DEBUG                  LWIP_DBG_ON
+// Enable temporarily when diagnosing MQTT connection failures.
+#define MQTT_DEBUG                  LWIP_DBG_OFF
 #endif
 
 #define ETHARP_DEBUG                LWIP_DBG_OFF
@@ -75,8 +74,8 @@
 #define IP_DEBUG                    LWIP_DBG_OFF
 #define IP_REASS_DEBUG              LWIP_DBG_OFF
 #define RAW_DEBUG                   LWIP_DBG_OFF
-#define MEM_DEBUG                   LWIP_DBG_ON
-#define MEMP_DEBUG                  LWIP_DBG_ON
+#define MEM_DEBUG                   LWIP_DBG_OFF
+#define MEMP_DEBUG                  LWIP_DBG_OFF
 #define SYS_DEBUG                   LWIP_DBG_OFF
 #define TCP_DEBUG                   LWIP_DBG_OFF
 #define TCP_INPUT_DEBUG             LWIP_DBG_OFF
