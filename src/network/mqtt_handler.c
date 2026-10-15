@@ -38,6 +38,7 @@ static size_t incoming_used;
 static bool incoming_valid;
 static uint32_t dropped_messages;
 
+//checks to see if this is a valid topic or filter. If filter is true, then the topic can contain wildcards.
 static bool valid_topic(const char *topic, bool filter) {
     if (topic == NULL) return false;
     size_t length = strlen(topic);
@@ -62,6 +63,7 @@ static void enqueue_incoming(void) {
     incoming_valid = false;
 }
 
+// Callback for incoming publish messages. Called from lwIP's TCP thread.
 static void incoming_publish_cb(void *arg, const char *topic, u32_t total_length) {
     (void)arg;
     if (incoming_valid) ++dropped_messages;
@@ -78,6 +80,7 @@ static void incoming_publish_cb(void *arg, const char *topic, u32_t total_length
     if (total_length == 0) enqueue_incoming();
 }
 
+// Callback for incoming data. Called from lwIP's TCP thread.
 static void incoming_data_cb(void *arg, const u8_t *data, u16_t length, u8_t flags) {
     (void)arg;
     if (!incoming_valid) return;
@@ -98,6 +101,7 @@ static void incoming_data_cb(void *arg, const u8_t *data, u16_t length, u8_t fla
     }
 }
 
+// Callback for subscription status changes. Called from lwIP's TCP thread.
 static void subscription_cb(void *arg, err_t result) {
     subscription_t *subscription = arg;
     subscription_pending = false;
@@ -111,6 +115,7 @@ static void subscription_cb(void *arg, err_t result) {
     }
 }
 
+// Service subscriptions, one at a time. This is called from the main loop.
 static void service_subscriptions(void) {
     if (subscription_pending) return;
     if (subscription_retry_wait &&
@@ -132,6 +137,7 @@ static void service_subscriptions(void) {
     }
 }
 
+// Callback for MQTT connection status changes. Called from lwIP's TCP thread.
 static void mqtt_connection_cb(mqtt_client_t *mqtt, void *arg, mqtt_connection_status_t status) {
     (void)arg;
     connection_pending = false;
@@ -152,6 +158,7 @@ static void mqtt_connection_cb(mqtt_client_t *mqtt, void *arg, mqtt_connection_s
     }
 }
 
+// Method to connect to the broker at the given address. Called from lwIP's TCP thread.
 static void connect_to_broker(const ip_addr_t *address, const char *client_id) {
     client_info.client_id = client_id;
     client_info.keep_alive = keep_alive_seconds;
@@ -164,6 +171,7 @@ static void connect_to_broker(const ip_addr_t *address, const char *client_id) {
     }
 }
 
+// Callback for DNS resolution. Called from lwIP's TCP thread.
 static void dns_found_cb(const char *name, const ip_addr_t *address, void *arg) {
     if (address != NULL) {
         connect_to_broker(address, (const char *)arg);
@@ -173,6 +181,7 @@ static void dns_found_cb(const char *name, const ip_addr_t *address, void *arg) 
     }
 }
 
+// Service the MQTT connection, including DNS resolution and connection attempts. Called from the main loop.
 static void service_connection(const char *client_id) {
     if (client && mqtt_client_is_connected(client)) {
         service_subscriptions();
@@ -198,6 +207,7 @@ static void service_connection(const char *client_id) {
     }
 }
 
+// Initialize the MQTT client with the given client ID. Called from the main loop.
 void init_mqtt_client(const char *client_id) {
     if (client_id == NULL || client_id[0] == '\0') return;
     cyw43_arch_lwip_begin();
@@ -205,6 +215,7 @@ void init_mqtt_client(const char *client_id) {
     cyw43_arch_lwip_end();
 }
 
+//Method to configure the MQTT "will" message, which is sent by the broker if the client disconnects unexpectedly. Called from the main loop.
 bool mqtt_configure_will(const char *topic, const char *payload, uint16_t keep_alive) {
     if (!valid_topic(topic, false) || payload == NULL ||
         strlen(payload) > MQTT_PAYLOAD_MAX_LENGTH || keep_alive == 0) return false;
@@ -223,10 +234,12 @@ bool mqtt_configure_will(const char *topic, const char *payload, uint16_t keep_a
     return accepted;
 }
 
+// Subscribe to a topic with QoS 0. Returns true if the subscription was accepted or already active, false otherwise. Called from the main loop.
 bool mqtt_subscribe_topic(const char *topic) {
     return mqtt_subscribe_topic_qos(topic, 0);
 }
 
+// Subscribe to a topic with the given QoS (0 or 1). Returns true if the subscription was accepted or already active, false otherwise. Called from the main loop.
 bool mqtt_subscribe_topic_qos(const char *topic, uint8_t qos) {
     if (!valid_topic(topic, true) || qos > 1) return false;
     cyw43_arch_lwip_begin();
