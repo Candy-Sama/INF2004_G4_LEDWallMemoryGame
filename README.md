@@ -19,13 +19,46 @@ sensor publishes GREEN/RED to Node 2, whose application code changes its LEDs.
 Both nodes also publish status once a second. Those demo messages and node
 numbers are not built into the MQTT framework.
 
+## Standard Wi-Fi setup (current build)
+
+The standard firmware uses `WIFI_SSID` and `WIFI_PASSWORD` from
+`config/wifi_creds.h`. `main.c` supplies them to
+`wifi_init_and_connect(WIFI_SSID, WIFI_PASSWORD)`. Open the USB serial monitor
+to start the board; no credential-entry prompt appears. Changing the configured
+network requires rebuilding and reflashing. The connection attempt can take up
+to 30 seconds. On startup failure, check the settings/network and restart.
+
+The reusable Wi-Fi module still accepts credentials as parameters; it does not
+include the credentials file itself. Never share that file's passwords in logs
+or presentations.
+
+## Optional advanced Wi-Fi setup (saved separately)
+
+The serial-prompt version is preserved as:
+
+- `build/LED_MEMORY_GAME_node1_advanced_wifi_setup.uf2`
+- `build/LED_MEMORY_GAME_node2_advanced_wifi_setup.uf2`
+
+Those snapshots ask for a network name and password on every restart, using
+USB serial at 115200 baud with LF, CR or CRLF line endings. They accept a 1-32
+byte SSID and an 8-63 byte WPA2 passphrase, retry after connection failure and do
+not save credentials to flash. The firmware does not echo the password; the
+terminal's own input box/local echo may still show it.
+
+The optional source remains in `src/network/wifi_setup.c/.h`, but is excluded
+from the standard build. To re-enable it, add `wifi_setup.c` to CMake's source
+list, include `wifi_setup.h` in `main.c`, and replace the hardcoded startup
+connection block with `wifi_setup_prompt()`. Standard builds do not overwrite
+the separately named advanced UF2 snapshots. Live network switching while MQTT
+is active and flash persistence are not implemented.
+
 ## Interface for teammates
 
 Include `mqtt_handler.h`. Initialise the Wi-Fi architecture before using the
 MQTT APIs. Call them from the main loop; locks are handled inside the module.
 
 ```c
-// After wifi_init_and_connect() succeeds:
+// After wifi_init_and_connect(ssid, password) succeeds:
 // The layout/identity module supplies this full topic string.
 if (!mqtt_subscribe_topic(command_topic)) {
     // Invalid filter, too long, or subscription table full: report setup failure.
@@ -139,10 +172,9 @@ For future builds, set NODE_ID to the intended board, compile, then flash
 do not refresh the separately labelled snapshot files. The current source is
 set to Node 1. Do not flash Node 1's firmware onto both boards.
 
-Both boards currently wait for a USB serial monitor at startup. COM numbers may
+Both boards wait for a USB serial monitor at startup. COM numbers may
 change after flashing, and only one serial monitor can open each port. Closing
-its connection after startup does not stop the firmware. Wi-Fi credentials are
-in `config/wifi_creds.h`; do not include credentials in team presentations.
+its connection after startup does not stop the firmware. Avoid sharing screenshots of your terminal password-entry box.
 
 ## Troubleshooting
 

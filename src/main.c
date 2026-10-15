@@ -5,6 +5,7 @@
 #include "hardware/i2c.h"
 #include "node_config.h"
 #include "wifi_manager.h"
+#include "wifi_creds.h" // Standard build: application supplies configured credentials.
 #include "mqtt_handler.h"
 #include "imudriver.h"
 #include "motion_detector.h"
@@ -127,7 +128,7 @@ int main(void) {
     snprintf(client_id, sizeof(client_id), "SE4_%s", board_id);
     printf("MQTT client: %s\nListen: %s\n", client_id, MQTT_COMMAND_TOPIC);
 
-    if (!wifi_init_and_connect()) {
+    if (!wifi_init_and_connect(WIFI_SSID, WIFI_PASSWORD)) {
         printf("Wi-Fi setup failed. Check credentials/network and restart.\n");
         return 1;
     }
