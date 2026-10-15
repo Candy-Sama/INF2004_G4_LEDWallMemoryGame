@@ -1,162 +1,175 @@
-# LED memory game: working communication demo
+# MQTT framework and two-board demo
 
-Start here when explaining this project. The current firmware is a two-Pico
-movement demo. Card matching, game-state management and panel-tap calibration
-are still future work.
+The network module transports messages. It does not assign board identities,
+construct application topics, interpret game events or choose LED colours.
+The identity/layout owner supplies complete topics; application modules decide
+what their payloads mean.
 
-## The explanation to give your teammates
+## What is implemented
 
-> Each Pico runs the same C program with a different NODE_ID. Node 1 reads its
-> GY-511 accelerometer and detects a sudden movement. It publishes GREEN or RED
-> to Node 2's command topic. HiveMQ forwards the message to Node 2. Node 2 checks
-> the command and updates its LED panel. Both boards also send a status message
-> once a second, and either board can receive commands from our browser client.
+- Configurable subscriptions, copied into owned storage.
+- Automatic MQTT reconnect attempts and subscription restoration.
+- Runtime subscription registration, with retries when a request fails.
+- Generic publishing with explicit payload length (text or binary).
+- A bounded FIFO of complete received messages, including fragmented payloads.
+- Connection/readiness queries and a cumulative received-message discard counter.
 
-The C code runs on the Picos. VS Code builds the firmware on the laptop. The
-browser is another MQTT client; the broker forwards messages and does not run
-our game logic.
+The application in `main.c` is a working integration example: moving Node 1's
+sensor publishes GREEN/RED to Node 2, whose application code changes its LEDs.
+Both nodes also publish status once a second. Those demo messages and node
+numbers are not built into the MQTT framework.
+
+## Interface for teammates
+
+Include `mqtt_handler.h`. Initialise the Wi-Fi architecture before using the
+MQTT APIs. Call them from the main loop; locks are handled inside the module.
+
+```c
+// After wifi_init_and_connect() succeeds:
+// The layout/identity module supplies this full topic string.
+if (!mqtt_subscribe_topic(command_topic)) {
+    // Invalid filter, too long, or subscription table full: report setup failure.
+}
+
+// Call on every main-loop iteration while Wi-Fi is available, even when connected.
+// client_id must stay valid for the lifetime of the connection.
+init_mqtt_client(client_id);
+
+if (mqtt_is_ready()) {
+    mqtt_message_t message;
+    // Limit the batch so a busy queue cannot starve other application tasks.
+    for (size_t i = 0; i < MQTT_RX_QUEUE_CAPACITY && mqtt_receive(&message); ++i) {
+        // Dispatch message.topic, message.payload and message.length to your module.
+        // The payload is NOT null-terminated. Do not use printf("%s", message.payload).
+    }
+}
+
+// Example outgoing selection; the framework does not interpret this text.
+const char selection[] = "SELECT:2";
+bool queued = mqtt_send("game/input", selection, sizeof(selection) - 1);
+```
+
+`mqtt_subscribe_topic(topic)` returning true means the topic was registered
+locally. `mqtt_is_ready()` becomes true only when connected and every registered
+subscription has received a successful broker response. With no subscriptions,
+ready simply means connected. Registering a new topic makes ready false until
+that topic is accepted. Re-registering the same topic is harmless.
+
+`mqtt_send(topic, payload, length)` returning true means the message was queued
+locally. It does not prove the broker or another board processed it. Publishing
+uses QoS 0 and retain=false. The receiver must already be subscribed.
+`mqtt_receive(&message)` removes the oldest complete message and copies it into
+caller-owned storage. It returns false for an empty queue or NULL destination.
+
+Topic strings must be valid MQTT UTF-8 strings. The framework checks length and
+wildcard placement; it does not validate UTF-8 encoding. Subscription filters
+support `+` and `#`. Publish topics must not contain wildcards.
+
+## Limits and failure behaviour
+
+| Resource | Limit / policy |
+| --- | --- |
+| Registered subscriptions | 8 unique filters, each copied; no removal API yet |
+| Topic/filter length | 95 bytes, excluding the terminating zero |
+| Payload length | 256 bytes; binary data and empty payloads supported |
+| Receive queue | 8 complete messages, FIFO |
+| Full queue | Drop newest arriving message, preserve already queued messages |
+| Oversized or malformed incoming message | Discard the complete message |
+| Disconnect | Discard queued and partial incoming messages; retain subscription list |
+| Discard reporting | `mqtt_received_drop_count()`, cumulative uint32 counter |
+| Offline publishing | Return false; no outgoing/offline queue |
+| MQTT connection retry | Five-second minimum interval |
+| Subscription retry | One-second minimum after failure; one request in flight |
+
+`init_mqtt_client` must continue to run for retry servicing. During reconnect,
+readiness stays false until subscriptions are restored. Already received
+messages are cleared on disconnect so old demo/game actions are not replayed.
+Topics exceeding lwIP's own receive-header buffer may be rejected by the library
+before reaching the framework; teammates should respect the documented limits.
+
+This is not yet the full network statechart: QoS 1 acknowledgements, an outgoing
+queue, application delivery replies, Wi-Fi rejoin logic, node discovery and
+state resynchronisation are future work. The status demo is not a missing-board
+detector. The caller decides whether failed/stale game messages should be retried.
+
+## Code map
+
+| File | Owner/responsibility |
+| --- | --- |
+| `src/network/mqtt_handler.h` | Public framework API and message limits |
+| `src/network/mqtt_handler.c` | Broker connection, subscription list, message assembly and FIFO |
+| `config/network_config.h` | Broker host and port |
+| `src/network/wifi_manager.c` | Initial Wi-Fi connection |
+| `src/main.c` | Demo application: supplies topics, publishes motion and interprets colours |
+| `config/node_config.h` | Demo node numbers, complete topic strings and motion settings |
+| `src/sensors/imudriver.c` | Demo sensor driver, GY-511/LSM303DLHC on GP0/GP1 |
+| `src/sensors/motion_detector.h` | Demo motion detection and cooldown |
+| `src/display/ledmatrix.c` | Demo WS2812 output: 64 pixels on GP2 |
+
+The MQTT module has no dependency on `node_config.h`, sensor code or LED code.
+Its callbacks only collect data and update networking state. Application code
+pops messages in the main loop and performs hardware/game actions there.
+The Pico SDK services networking in the background; this demo is not FreeRTOS.
+Game-engine and audio files remain unfinished team placeholders.
 
 ```mermaid
 flowchart LR
-    S[Node 1 sensor] --> D[Movement detector]
-    D --> P[MQTT publish: GREEN or RED]
-    P --> B[HiveMQ broker]
-    B --> R[Node 2 MQTT receive callback]
-    R --> C[Store pending command]
-    C --> L[Node 2 main loop updates LEDs]
+    A[Application supplies topic and payload] --> B[mqtt_send]
+    B --> C[Broker]
+    C --> D[MQTT callbacks assemble message]
+    D --> E[Bounded receive FIFO]
+    E --> F[mqtt_receive in main loop]
+    F --> G[Application interprets message]
 ```
 
-## Read these files in this order
+## Run the existing demo after the framework change
 
-| File | Responsibility | Functions to start with |
-| --- | --- | --- |
-| `config/node_config.h` | Board number, topics, broker and sensitivity | `NODE_ID`, `PEER_NODE_ID` |
-| `src/main.c` | Coordinates the working demo | `main`, `read_movement`, `send_movement`, `apply_received_command` |
-| `src/sensors/imudriver.c` | Reads the GY-511's LSM303DLHC accelerometer over I2C | `imu_init`, `imu_read_acceleration` |
-| `src/sensors/motion_detector.h` | Recognises sudden changes, then waits before rearming | `motion_detector_update` |
-| `src/network/mqtt_handler.c` | Connects, subscribes, publishes and parses messages | `init_mqtt_client`, `publish_message`, `incoming_data_cb` |
-| `src/display/ledmatrix.c` | Sends colours to the WS2812 panel using PIO | `ledmatrix_init`, `ledmatrix_fill` |
-| `src/network/wifi_manager.c` | Initialises the Wi-Fi connection | `wifi_init_and_connect` |
+1. Flash `build/LED_MEMORY_GAME_node2.uf2` onto Node 2, open its serial monitor,
+   and wait for `Subscribed to se4/memorygame/node2/command`.
+2. Flash `build/LED_MEMORY_GAME_node1.uf2` onto Node 1 and open its monitor.
+3. Hold Node 1's sensor still for a second, then briefly move it. Node 2 should
+   alternate green/red on successive recognised movements. Node 1 stays pink.
+4. Publish RED, GREEN or OFF from the browser to either board's command topic,
+   QoS 0 and Retain unchecked. The targeted board should respond.
+5. Publish `SELECT:2` to a demo command topic. The transport will deliver it;
+   the colour demo should print an unrecognised-payload message, not change LEDs.
 
-The `.h` files declare shared types/functions; `.c` files contain their
-implementations. The small movement detector is implemented directly in its
-header so its logic can also be tested without a Pico.
+For future builds, set NODE_ID to the intended board, compile, then flash
+`build/LED_MEMORY_GAME.uf2`. Normal builds overwrite that generic filename but
+do not refresh the separately labelled snapshot files. The current source is
+set to Node 1. Do not flash Node 1's firmware onto both boards.
 
-`src/gameengine/` and `src/sensors/audio.*` are unfinished placeholders for team
-integration. They are not part of the working game behaviour. The empty game
-source files are excluded from the current build. `ws2812.pio`, `lwipopts.h`
-and `pico_sdk_import.cmake` support the hardware/network libraries; begin with
-the application files above rather than changing these.
+Both boards currently wait for a USB serial monitor at startup. COM numbers may
+change after flashing, and only one serial monitor can open each port. Closing
+its connection after startup does not stop the firmware. Wi-Fi credentials are
+in `config/wifi_creds.h`; do not include credentials in team presentations.
 
-## What happens during one movement
+## Troubleshooting
 
-1. `main` calls `read_movement` approximately every 10 ms.
-2. `imu_read_acceleration` reads fresh X/Y/Z acceleration in mg (1000 mg = 1 g).
-3. `motion_detector_update` compares successive samples. It waits for 200 ms of
-   relative quiet before arming, triggers on a change of at least 250 mg on any
-   axis, then requires both an 800 ms cooldown and another quiet period.
-4. Only Node 1 calls `send_movement`. It alternates GREEN and RED and publishes
-   to `se4/memorygame/node2/command`. Offline movements are discarded.
-5. The broker forwards the message to Node 2, which subscribed after connecting.
-6. The library calls `incoming_publish_cb` to check the topic/length, then
-   `incoming_data_cb` to collect and interpret the payload. This is a callback:
-   a function called by the library when something happens.
-7. The callback stores a command. `apply_received_command` takes that command
-   in the main loop and calls `ledmatrix_fill`.
+- Connection exists but not ready: look for failed subscription logs and keep
+  calling `init_mqtt_client` so the subscription retry can run.
+- No received messages: check the exact supplied topics, ready state and discard
+  counter. Ensure the receiver subscribed before the sender published.
+- LEDs do not understand a new command: update the application parser, not MQTT.
+- Raw sensor diagnostics: set IMU_LOG_READINGS=1 in `node_config.h`.
+- MQTT diagnostics: set MQTT_DEBUG to LWIP_DBG_ON in `lwipopts.h` (Debug build).
+- Sensor missing at boot: fix wiring/power and restart. Runtime reads use timeouts.
+- Motion sensitivity: adjust MOTION_THRESHOLD_MG / MOTION_COOLDOWN_MS. This is a
+  desk-motion test, not calibrated panel taps; mounting is still needed.
 
-Networking uses the Pico SDK's background architecture, not FreeRTOS tasks.
-Network callbacks do not drive LEDs or wait for sensors. The MQTT module locks
-shared networking state internally. Call its public functions from the main
-loop, without adding another `cyw43_arch_lwip_begin/end` pair.
+## Validation
 
-## Topics and messages
-
-| Purpose | Topic | Payload |
-| --- | --- | --- |
-| Node 1 status | `se4/memorygame/node1` | `Hello from my Pico 1!` |
-| Node 2 status | `se4/memorygame/node2` | `Hello from my Pico 2!` |
-| Control Node 1 | `se4/memorygame/node1/command` | `RED`, `GREEN` or `OFF` |
-| Control Node 2 | `se4/memorygame/node2/command` | `RED`, `GREEN` or `OFF` |
-
-Commands are uppercase with no quotation marks, spaces or newline added.
-The client ID identifies the physical Pico and is generated from its board ID.
-NODE_ID chooses its topics: both boards still need different NODE_ID settings.
-
-Messages use QoS 0 and retain=false. A successful `publish_message` return means
-queued locally, not that the other panel applied it. The receiver must already
-be subscribed. The receiver keeps only the latest pending colour command; this
-is suitable for the colour demo, not a queue of game selections. Status messages
-are useful for observation; they are not yet a game-disconnection detector.
-
-## Build and demonstrate
-
-Hardware: GY-511 SDA to GP0, SCL to GP1; 64-pixel WS2812 data to GP2.
-Wi-Fi credentials are in `config/wifi_creds.h`; do not paste them into a demo
-or team presentation.
-
-1. Set `NODE_ID` to 2 in `config/node_config.h`, compile in VS Code, and flash
-   `build/LED_MEMORY_GAME.uf2` onto Pico 2. Open its USB serial monitor at 115200.
-2. Wait for `Subscribed to se4/memorygame/node2/command`.
-3. Set `NODE_ID` to 1, compile again, and flash Pico 1. Open its serial monitor.
-4. Hold Node 1's sensor still for a second, move it briefly, then pause.
-   Node 2 should alternate green/red on successive recognised movements.
-5. To test receiving separately, publish RED/GREEN/OFF from the browser to the
-   chosen board's command topic, QoS 0, Retain unchecked.
-
-Each compile overwrites `LED_MEMORY_GAME.uf2`. The separately named
-`LED_MEMORY_GAME_node1.uf2` and `LED_MEMORY_GAME_node2.uf2` are snapshots made
-during the cleanup build; future normal builds do not refresh those copies.
-Saving source code does not update an already-flashed Pico.
-
-Both boards intentionally wait for a USB serial monitor at startup. COM numbers
-can change after flashing; only one monitor can own a port at a time. After
-startup, disconnecting a monitor does not stop the running firmware.
-
-## Settings to change when troubleshooting
-
-| Change | Location |
-| --- | --- |
-| Which board is being built | `NODE_ID` in `node_config.h` |
-| Destination of movement commands | `PEER_NODE_ID` in `node_config.h` |
-| Disable movement publishing | `ENABLE_MOTION_TEST` = 0 |
-| Print raw acceleration twice a second | `IMU_LOG_READINGS` = 1 |
-| More/less sensitive movement detection | Lower/raise `MOTION_THRESHOLD_MG` |
-| Wait longer between events | Increase `MOTION_COOLDOWN_MS` |
-| Broker host/port | `MQTT_BROKER_HOST`, `MQTT_BROKER_PORT` |
-| Outgoing colour or action | `send_movement` in `main.c` |
-| New command word | Enum in `mqtt_handler.h`, parser in `incoming_data_cb`, action in `apply_received_command` |
-| Detailed MQTT connection logs | Set `MQTT_DEBUG` to `LWIP_DBG_ON` in `lwipopts.h` (Debug build) |
-
-Rebuild and reflash after changes. Keep the normal low brightness values while
-testing. The startup colour is dim pink; publishing to another board does not
-change the sender's own panel.
-
-## Troubleshooting and current limits
-
-- No boot output: check the selected COM port and open the serial monitor.
-- IMU read error: check power, common GND, SDA/GP0 and SCL/GP1. Reads have timeouts;
-  runtime failures retry, but a sensor absent at boot requires a restart after fixing it.
-- MQTT status 256: disconnected. Enable MQTT debug to see the underlying error.
-  A TCP port test alone does not prove an MQTT handshake succeeds.
-- Movement logged but no colour change: check the receiver is connected and
-  subscribed, NODE_ID/PEER_NODE_ID match, and the topic is exact.
-- MQTT reconnects are retried with a five-second minimum interval. There is no
-  explicit Wi-Fi rejoin loop, saved game state, Last Will or application acknowledgement.
-- Sudden tilting can trigger this movement demo. It is not yet a calibrated
-  panel-tap detector; the sensor must be mounted to the panel for that work.
-- Selection messages such as SELECT:2, card reveals and matching rules are not
-  implemented. Agree the protocol with the game-engine owner before adding them.
-
-## Verification
-
-Both node configurations compile. The host test covers startup, repeated swings,
-continuous shaking, cooldown, missing samples and timer wraparound:
+Host tests use stubbed SDK calls to exercise the actual MQTT module. They cover
+subscription registration/copying/limits, late registration, retry and readiness,
+fragmented binary/empty/maximum-sized messages, FIFO overflow, invalid inputs,
+disconnect cleanup and resubscription. They do not replace a hardware/broker test.
 
 ```powershell
+& C:/msys64/mingw64/bin/gcc.exe -std=c11 -Wall -Wextra -Werror -Itests/mqtt_stubs -Isrc/network -Iconfig tests/mqtt_handler_test.c src/network/mqtt_handler.c -o build/mqtt_handler_test.exe
+& ./build/mqtt_handler_test.exe
 & C:/msys64/mingw64/bin/gcc.exe -std=c11 -Wall -Wextra -Werror -Iconfig -Isrc/sensors tests/motion_detector_test.c -o build/motion_detector_test.exe
 & ./build/motion_detector_test.exe
 ```
 
-The original two-board movement test was verified on hardware before cleanup.
-After flashing the cleaned builds, repeat the movement and browser-command tests
-above to confirm the refactoring on your boards.
+Both node firmware builds and host tests are checked. The two-board sensor demo
+worked before this framework change; repeat the steps above on the new firmware.

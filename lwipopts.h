@@ -19,6 +19,9 @@
 // MEM_LIBC_MALLOC is incompatible with non polling versions
 #define MEM_LIBC_MALLOC             0
 #endif
+// Fits a maximum framework publish (95-byte topic + 256-byte payload).
+#define MQTT_OUTPUT_RINGBUF_SIZE    512
+
 #define MEM_ALIGNMENT               4
 #ifndef MEM_SIZE
 #define MEM_SIZE                    4000

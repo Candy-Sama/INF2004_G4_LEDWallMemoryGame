@@ -2,26 +2,43 @@
 #define MQTT_HANDLER_H
 
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
-#include "node_config.h"
+#define MQTT_TOPIC_MAX_LENGTH 95
+#define MQTT_PAYLOAD_MAX_LENGTH 256
+#define MQTT_RX_QUEUE_CAPACITY 8
+#define MQTT_MAX_SUBSCRIPTIONS 8
 
-typedef enum {
-    LED_COMMAND_NONE,
-    LED_COMMAND_RED,
-    LED_COMMAND_GREEN,
-    LED_COMMAND_OFF
-} led_command_t;
+// Topic is terminated text; payload is binary data, NOT a C string.
+typedef struct {
+    char topic[MQTT_TOPIC_MAX_LENGTH + 1];
+    uint8_t payload[MQTT_PAYLOAD_MAX_LENGTH];
+    size_t length;
+} mqtt_message_t;
 
-// Consume the latest received colour command safely from the main loop.
-led_command_t mqtt_take_led_command(void);
+// Call these APIs from the main loop after Wi-Fi architecture initialisation.
+// They handle network locking internally. The supplied client_id must stay valid.
+// Call repeatedly while Wi-Fi is up to service connection/subscription retries.
+void init_mqtt_client(const char *client_id);
 
-// Call from the main loop; network locking is handled inside this module.
-// client_id must remain valid for the client lifetime.
-// Repeated calls retry failed attempts with a five-second minimum interval.
-void init_mqtt_client(const char* client_id);
-// Returns true when queued locally, not when a receiver has applied the message.
-bool publish_message(const char* topic, const char* payload);
-
+// Copies a nonempty topic filter. Supports MQTT +/# wildcards. Idempotent.
+// true means registered locally, not yet acknowledged by the broker.
+// Filters are retained across reconnects; there is no removal API yet.
+bool mqtt_subscribe_topic(const char *topic);
+bool mqtt_is_ready(void);  // Connected AND all registered subscriptions accepted.
 bool is_mqtt_connected(void);
+
+// QoS 0, retain=false; true means queued locally, NOT delivery confirmation.
+// Rejects wildcards, oversized inputs and disconnected sends. No offline queue.
+// NULL payload is allowed only when length == 0.
+bool mqtt_send(const char *topic, const void *payload, size_t length);
+
+// Pops the oldest complete message. false means queue empty or NULL destination.
+// Queue full: discard the newest arriving message. Oversized/malformed messages
+// are discarded whole. Disconnect clears queued/partial messages to avoid stale
+// game events. The discard counter includes these losses and is cumulative.
+bool mqtt_receive(mqtt_message_t *message);
+uint32_t mqtt_received_drop_count(void);
 
 #endif

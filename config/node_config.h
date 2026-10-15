@@ -15,8 +15,6 @@
 #define MOTION_QUIET_MS 200
 #define MOTION_COOLDOWN_MS 800
 
-#define MQTT_BROKER_HOST "broker.hivemq.com"
-#define MQTT_BROKER_PORT 1883
 
 #if NODE_ID < 1 || NODE_ID > 6
 #error "NODE_ID must be between 1 and 6"
