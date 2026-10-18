@@ -21,17 +21,9 @@ int main(){
     stdio_init_all();
     sleep_ms(2000);
     led_init();
-    clear_frame();
-    /*// Test to display each corners
-    set_pixel(0, 0, urgb_u32(BRIGHTNESS, 0, BRIGHTNESS));
-    set_pixel(7, 0, urgb_u32(BRIGHTNESS, 0, BRIGHTNESS));
-    set_pixel(0, 7, urgb_u32(BRIGHTNESS, 0, BRIGHTNESS));
-    set_pixel(7, 7, urgb_u32(BRIGHTNESS, 0, BRIGHTNESS));*/
-    
-    set_brightness(20);
-    show_image(card_heart); //To change image to see the changes in LED
 
-    while(true){
-        tight_loop_contents();
-    }
+    show_image_rgb(diamondCard_bin); //To change image to see the changes in LED
+    sleep_ms(2000);
+    // show_image_rgb(heartCard_bin);
+    // sleep_ms(2000);
 }

@@ -36,5 +36,5 @@ void clear_frame(void);
 void set_pixel(int x, int y, uint32_t color);
 void show_frame(void);
 void set_brightness(uint8_t brightness);
-
+void show_image_rgb(const uint8_t *rgb);
 #endif

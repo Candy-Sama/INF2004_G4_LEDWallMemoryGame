@@ -43,3 +43,10 @@ void show_frame(void){
     }
     sleep_us(300);
 }
+
+// To display image on LED
+void show_image_rgb(const uint8_t *rgb){
+    for(int i = 0; i < NUM_LEDS; i++){
+        put_pixel(urgb_u32(rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2]));
+    }
+}
