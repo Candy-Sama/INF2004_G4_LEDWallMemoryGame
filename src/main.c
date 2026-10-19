@@ -1,3 +1,10 @@
+/* NOTE FROM AFI: make sure to downaloed the FreeRTOS Kernel. Use this command in the terminal.
+mkdir lib
+cd lib
+git clone --recurse-submodules https://github.com/FreeRTOS/FreeRTOS-Kernel.git
+cd .. 
+*/
+
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"

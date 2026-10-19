@@ -4,7 +4,7 @@
 #include "hardware/gpio.h"
 
 // FreeRTOS Includes
-#include "FreeRTOS.h"
+#include "FreeRTOSConfig.h"
 #include "task.h"
 #include "queue.h"
 
