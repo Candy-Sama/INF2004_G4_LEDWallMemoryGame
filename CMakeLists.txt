@@ -35,7 +35,7 @@ pico_sdk_init()
 
 # --- NEW: INCLUDE FREERTOS KERNEL ---
 set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/FreeRTOS-Kernel)
-include(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/FreeRTOS_Kernel_import.cmake)
+# (i will change this later)include(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/freertos_kernel_rp2040.cmake)
 
 # Add executable. Default name is the project name, version 0.1
 add_executable(LED_MEMORY_GAME 
@@ -46,7 +46,6 @@ add_executable(LED_MEMORY_GAME
     src/gameengine/memory.c
     src/network/mqtt_handler.c
     src/network/network_task.c
-    src/network/network_recovery.c
     src/network/wifi_manager.c
     src/sensors/imudriver.c
 )
@@ -73,10 +72,9 @@ target_link_libraries(LED_MEMORY_GAME
     hardware_i2c
     hardware_pio
     pico_unique_id
-    pico_rand
     pico_cyw43_arch_lwip_sys_freertos
     pico_lwip_mqtt
-    FreeRTOS-Kernel-Heap4
+    freertos_kernel_rp2040  # <--- NEW: LINK FREERTOS TO YOUR EXECUTABLE
 )
 target_compile_definitions(LED_MEMORY_GAME PRIVATE ASYNC_CONTEXT_DEFAULT_FREERTOS_TASK_STACK_SIZE=1024)
 
@@ -101,5 +99,3 @@ pico_enable_stdio_usb(display_test 1)
 pico_enable_stdio_uart(display_test 0)
 
 # ====================================================================================
-target_compile_options(LED_MEMORY_GAME PRIVATE $<$<COMPILE_LANGUAGE:ASM>:-I${CMAKE_CURRENT_LIST_DIR}/src/display>)
-target_compile_options(display_test PRIVATE $<$<COMPILE_LANGUAGE:ASM>:-I${CMAKE_CURRENT_LIST_DIR}/src/display>)

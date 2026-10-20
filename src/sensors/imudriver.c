@@ -1,108 +1,108 @@
-#include "imudriver.h"
 #include <stdio.h>
+#include "pico/stdlib.h"
+#include "hardware/i2c.h"
+#include "hardware/gpio.h"
 
-// LSM303DLHC datasheet: https://www.st.com/resource/en/datasheet/lsm303dlhc.pdf
-// Pico SDK uses seven-bit I2C addresses (not the shifted 0x32/0x33 forms).
-#define ACCEL_ADDRESS 0x19
-#define CTRL_REG1_A 0x20
-#define CTRL_REG4_A 0x23
-#define STATUS_REG_A 0x27
-#define OUT_X_L_A 0x28
-#define I2C_TIMEOUT_US 3000
+// FreeRTOS Includes
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
 
-static i2c_inst_t *imu_bus;
-static bool imu_ready;
+// Your custom header where CompactTapData is defined
+#include "imudriver.h"
 
-static bool read_registers(uint8_t reg, uint8_t *data, size_t length) {
-    // Bit 7 enables address auto-increment for an accelerometer burst read.
-    uint8_t subaddress = length > 1 ? (reg | 0x80) : reg;
-    int result = i2c_write_timeout_us(imu_bus, ACCEL_ADDRESS, &subaddress,
-                                    1, true, I2C_TIMEOUT_US);
-    if (result != 1) {
-        printf("IMU: register 0x%02X address write failed (%d).\n", reg, result);
-        return false;
+// Hardware Definitions (Adjust IMU_INT_PIN to match your wiring)
+#define I2C_PORT i2c0
+#define I2C_SDA_PIN 0
+#define I2C_SCL_PIN 1
+#define IMU_INT_PIN 2          // Example: The Pico pin connected to the IMU's INT output
+#define DEBOUNCE_DELAY_MS 400  // Ignore physical vibrations for 400ms after a tap
+
+// Global handles
+TaskHandle_t sensorTaskHandle = NULL;
+extern QueueHandle_t tapEventQueue; // The queue created in main.c
+
+uint8_t currentNodeId = 0; // Will be set during initialization
+
+/* ==========================================================================
+   1. HARDWARE INTERRUPT SERVICE ROUTINE (ISR)
+   This replaces the ±0.2s blocking loop. It fires instantly when the IMU 
+   hardware detects a physical shock and pulses the INT pin.
+   ========================================================================== */
+void imu_gpio_isr(uint gpio, uint32_t events) {
+    if (gpio == IMU_INT_PIN) {
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        
+        // Instantly wake up the sleeping FreeRTOS Sensor Task
+        vTaskNotifyGiveFromISR(sensorTaskHandle, &xHigherPriorityTaskWoken);
+        
+        // Yield if the Sensor Task has a higher priority than the currently running task
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     }
-    result = i2c_read_timeout_us(imu_bus, ACCEL_ADDRESS, data, length,
-                                 false, I2C_TIMEOUT_US);
-    if (result != (int)length) {
-        printf("IMU: register 0x%02X read failed (%d).\n", reg, result);
-        return false;
-    }
-    return true;
 }
 
-static bool write_register(uint8_t reg, uint8_t value) {
-    uint8_t bytes[] = {reg, value};
-    int result = i2c_write_timeout_us(imu_bus, ACCEL_ADDRESS, bytes,
-                                    sizeof(bytes), false, I2C_TIMEOUT_US);
-    if (result != (int)sizeof(bytes)) {
-        printf("IMU: register 0x%02X write failed (%d).\n", reg, result);
-        return false;
+/* ==========================================================================
+   2. FREERTOS SENSOR TASK
+   Sleeps at 0% CPU usage until woken by the ISR. Debounces the input, 
+   packs the bits, and safely queues the data for the Network Task.
+   ========================================================================== */
+void IMUSensorTask(void *pvParameters) {
+    CompactTapData tapData;
+    TickType_t lastTapTime = 0;
+
+    for (;;) {
+        // Sleep indefinitely until the hardware ISR sends a notification
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        TickType_t currentTime = xTaskGetTickCount();
+
+        // Software Debounce: Ignore if it hasn't been long enough since the last tap
+        // This solves the "vibrating shared wall" and "double-tap" risks
+        if ((currentTime - lastTapTime) > pdMS_TO_TICKS(DEBOUNCE_DELAY_MS)) {
+            lastTapTime = currentTime;
+
+            // Pack the Minimum-Bit Data Representation (Change Req 1)
+            tapData.node_id = currentNodeId;
+            tapData.tap_event = 1;
+            tapData.imu_fault = 0; // Set to 1 if you add I2C error checking later
+            tapData.reserved = 0;
+
+            // Send BY VALUE to the FreeRTOS Queue to prevent Race Conditions
+            if (tapEventQueue != NULL) {
+                xQueueSend(tapEventQueue, &tapData, 0);
+            }
+            
+            printf("Valid tap detected on Node %d! Data packed and queued.\n", currentNodeId);
+        } else {
+            // It was a false trigger (vibration or double tap) - ignore it.
+            printf("Ignored false tap/vibration.\n");
+        }
     }
-    return true;
 }
 
-bool imu_init(i2c_inst_t *bus) {
-    imu_bus = bus;
-    imu_ready = false;
-    if (bus == NULL) {
-        return false;
-    }
-    uint8_t control;
-    // Probe a documented register before configuring the expected GY-511 chip.
-    if (!read_registers(CTRL_REG1_A, &control, 1)) {
-        printf("IMU: no usable accelerometer response at 0x19. Check SDA/SCL, power and GND.\n");
-        return false;
-    }
-    // 0x88: block data update, little endian, +/-2g, high resolution.
-    // 0x57: 100 Hz sampling, normal power, X/Y/Z enabled.
-    if (!write_register(CTRL_REG4_A, 0x88) ||
-        !write_register(CTRL_REG1_A, 0x57)) {
-        return false;
-    }
-    uint8_t control4;
-    if (!read_registers(CTRL_REG1_A, &control, 1) ||
-        !read_registers(CTRL_REG4_A, &control4, 1)) {
-        return false;
-    }
-    if (control != 0x57 || control4 != 0x88) {
-        printf("IMU: unexpected config readback: CTRL1=0x%02X CTRL4=0x%02X.\n",
-               control, control4);
-        return false;
-    }
-    imu_ready = true;
-    printf("IMU: accelerometer at 0x19 configured for 100 Hz, +/-2g.\n");
-    return true;
-}
+/* ==========================================================================
+   3. INITIALIZATION FUNCTION
+   Called once from main() to set up I2C, pins, and launch the task.
+   ========================================================================== */
+void imu_init(uint8_t node_id) {
+    currentNodeId = node_id;
 
-static int16_t decode_axis_mg(const uint8_t *bytes) {
-    // Signed, little-endian, 12-bit sample left-aligned in 16 bits.
-    // At +/-2g in high-resolution mode, one count is nominally 1 mg.
-    uint16_t packed = (uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8);
-    int32_t signed_value = packed;
-    if (packed & 0x8000) {
-        signed_value -= 65536;
-    }
-    return (int16_t)(signed_value / 16);
-}
+    // Initialize I2C0 at 400 kHz
+    i2c_init(I2C_PORT, 400 * 1000);
+    gpio_set_function(I2C_SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(I2C_SCL_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(I2C_SDA_PIN);
+    gpio_pull_up(I2C_SCL_PIN);
 
-imu_read_result_t imu_read_acceleration(imu_acceleration_t *sample) {
-    if (!imu_ready || sample == NULL) {
-        return IMU_READ_ERROR;
-    }
-    uint8_t status;
-    if (!read_registers(STATUS_REG_A, &status, 1)) {
-        return IMU_READ_ERROR;
-    }
-    if (!(status & 0x08)) {
-        return IMU_NO_NEW_DATA;
-    }
-    uint8_t bytes[6];
-    if (!read_registers(OUT_X_L_A, bytes, sizeof(bytes))) {
-        return IMU_READ_ERROR;
-    }
-    sample->x_mg = decode_axis_mg(bytes);
-    sample->y_mg = decode_axis_mg(bytes + 2);
-    sample->z_mg = decode_axis_mg(bytes + 4);
-    return IMU_NEW_DATA;
+    // Initialize IMU Interrupt Pin
+    gpio_init(IMU_INT_PIN);
+    gpio_set_dir(IMU_INT_PIN, GPIO_IN);
+    
+    // Create the FreeRTOS Task (Stack size 256, Priority 3)
+    xTaskCreate(IMUSensorTask, "IMUSensorTask", 256, NULL, 3, &sensorTaskHandle);
+
+    // Attach the hardware ISR to the INT pin (Falling or Rising edge depends on your IMU model)
+    gpio_set_irq_enabled_with_callback(IMU_INT_PIN, GPIO_IRQ_EDGE_FALL, true, &imu_gpio_isr);
+    
+    printf("IMU Driver Initialized for Node %d\n", currentNodeId);
 }

@@ -1,10 +1,5 @@
 # FreeRTOS networking starter
 
-**Recovery update:** read [RECOVERY.md](RECOVERY.md). Panels can now opt into
-snapshot/application-acknowledgement/controller-resume recovery. The default
-demo enables it; `network_game_ready()` gates input. Multiple filters are supported.
-
-
 The firmware now starts the FreeRTOS scheduler, not a main-loop superloop.
 Two application-owned tasks run on core 0. SDK tasks service lwIP and CYW43;
 "one network owner" means one caller of our Wi-Fi/MQTT APIs, not one task inside
@@ -47,9 +42,7 @@ the failure. UART logging remains disabled because GP0/GP1 are used for I2C.
 
 ## Calls for teammates
 
-Use `network_task.h` from ordinary tasks. Recovery-enabled panels must use
-`network_game_ready()` before accepting taps. Continue receiving snapshots while
-`network_ready()` is true, even if game readiness is false. No calls here are ISR-safe.
+Use `network_task.h` from ordinary tasks. No calls here are ISR-safe.
 
 ```c
 const char tap[] = "TAP";
@@ -115,10 +108,9 @@ offline discards and application RX overflow. The lower transport's separate
 the owner. Queue acceptance provides no per-request completion to the caller yet.
 
 Wi-Fi connection failures retry after a delay; MQTT retries/subscriptions remain
-in the transport module. Hardware recovery is not yet validated. Snapshot retries,
-application acknowledgements, resume gating and a controller lease now exist;
-see RECOVERY.md. The actual game snapshot, all-panel barrier and timer preservation
-remain application integration work.
+in the transport module. Hardware recovery is not yet validated. A delayed game
+event still needs boot/game/revision checks from the protocol. Heartbeats,
+per-panel application acknowledgements and pause/resume remain integration work.
 
 The firmware now boots without waiting for USB serial. Opening a monitor later
 may miss early logs. It retains the legacy two-board demo topics, not v1 JSON.
@@ -132,7 +124,7 @@ binary receive routing, disconnect cleanup and failed-send accounting. They do
 not simulate the scheduler or radio. Run from the repository root:
 
 ```powershell
-gcc -std=c11 -Wall -Wextra -Werror -Itests/rtos_stubs -Isrc/network tests/network_task_test.c src/network/network_task.c src/network/network_recovery.c -o build/network_task_test.exe
+gcc -std=c11 -Wall -Wextra -Werror -Itests/rtos_stubs -Isrc/network tests/network_task_test.c src/network/network_task.c -o build/network_task_test.exe
 ./build/network_task_test.exe
 ```
 

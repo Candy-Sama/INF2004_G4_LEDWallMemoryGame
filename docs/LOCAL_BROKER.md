@@ -1,11 +1,5 @@
 # First local MQTT test
 
-**Current firmware:** the demo now requires snapshot/applied/resume recovery
-before accepting colour commands or publishing movement. Run the example
-controller from [RECOVERY.md](RECOVERY.md) for the appropriate node ID. The
-standalone terminal learning exercises still work without firmware or Picos.
-
-
 The broker is a program on your PC, not on the Pico. Keep the PC and both Picos
 on the same private test router; disable client isolation on that router.
 
