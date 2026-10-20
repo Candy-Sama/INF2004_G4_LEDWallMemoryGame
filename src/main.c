@@ -1,12 +1,15 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
-#include "hardware/dma.h"
 #include "hardware/pio.h"
-#include "pico/cyw43_arch.h"
 #include "ws2812.pio.h" 
-#include "mqtt_handler.h"
-#include "wifi_manager.h" // Added your new Wi-Fi module
+#include "game_logic.h"
+
+// FreeRTOS Includes
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include "semphr.h"
 
 #define LED_PIN 2       
 #define NUM_LEDS 64     
@@ -14,96 +17,116 @@
 #define I2C_SDA 8
 #define I2C_SCL 9
 
-static inline void put_pixel(uint32_t pixel_grb) {
-    pio_sm_put_blocking(pio0, 0, pixel_grb << 8u);
+// FreeRTOS Handles
+QueueHandle_t tap_event_queue;
+SemaphoreHandle_t game_state_mutex;
+
+// The central game state using the Minimum-Bit struct
+GameManager master_game;
+
+// --- FREE RTOS TASKS ---
+
+void Game_Logic_Task(void *pvParameters) {
+    uint8_t received_panel_id;
+
+    while (true) {
+        // 1. Wait infinitely for a tap event to arrive in the queue from the network
+        if (xQueueReceive(tap_event_queue, &received_panel_id, portMAX_DELAY) == pdPASS) {
+            
+            // 2. Tap received! Lock the Mutex to protect the shared bit-field data
+            if (xSemaphoreTake(game_state_mutex, portMAX_DELAY) == pdTRUE) {
+                
+                // 3. Process the game rules safely
+                printf("Processing tap on panel: %d\n", received_panel_id);
+                game_process_input(&master_game, received_panel_id);
+                game_evaluate_match(&master_game);
+                
+                // (Mustaqim's network_publish command will go here later to broadcast the state)
+                
+                // 4. Unlock the Mutex so the Network task can use it again
+                xSemaphoreGive(game_state_mutex);
+            }
+        }
+    }
 }
 
-static inline uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b) {
-    return ((uint32_t)(r) << 8) | ((uint32_t)(g) << 16) | (uint32_t)(b);
+// DUMMY IN PLACE TO TEST MASTER //
+void Dummy_Network_Task(void *pvParameters) {
+    uint8_t fake_tap;
+
+    // Wait 3 seconds for boot
+    vTaskDelay(pdMS_TO_TICKS(3000)); 
+
+    // Simulate Player Tapping Panel 0
+    fake_tap = 0;
+    printf("[DUMMY NETWORK] Sending Tap for Panel %d to Queue...\n", fake_tap);
+    xQueueSend(tap_event_queue, &fake_tap, portMAX_DELAY);
+    vTaskDelay(pdMS_TO_TICKS(1000)); // Wait 1 second
+
+    // Simulate Player Double-Tapping Panel 0 to cheat
+    fake_tap = 0;
+    printf("[DUMMY NETWORK] Sending Double-Tap for Panel %d to Queue...\n", fake_tap);
+    xQueueSend(tap_event_queue, &fake_tap, portMAX_DELAY);
+    
+    // The task deletes itself when finished
+    vTaskDelete(NULL); 
 }
+
+// --- MAIN BOOT SEQUENCE ---
 
 int main() {
     stdio_init_all();
     
+    // Wait for Serial Monitor to connect so we don't miss boot messages
     while (!stdio_usb_connected()) {
         sleep_ms(100);
     }
-    sleep_ms(1000); // Give the UI 1 second to catch up
+    sleep_ms(1000); 
     
-    printf("\n\n--- PICO W BOOT SEQUENCE ---\n");
+    printf("\n\n--- PICO W BOOT SEQUENCE (FreeRTOS) ---\n");
 
-    // I2C Initialisation for IMU
+    // Initialize I2C Hardware
     i2c_init(I2C_PORT, 400*1000);
     gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
     gpio_pull_up(I2C_SDA);
     gpio_pull_up(I2C_SCL);
 
-    // PIO WS2812 Initialization
+    // Initialize WS2812 PIO Hardware
     PIO pio = pio0;
     int sm = 0;
     uint offset = pio_add_program(pio, &ws2812_program);
     ws2812_program_init(pio, sm, offset, LED_PIN, 800000, false);
     printf("Loaded WS2812 PIO program at %d on GP%d\n", offset, LED_PIN);
 
-    // Network Setup using the new subsystem
-    if (wifi_init_and_connect()) {
-        cyw43_arch_lwip_begin();
-        init_mqtt_client("SE4_Pico_Node_1");
-        cyw43_arch_lwip_end();
+    // 1. Initialize the Master Game Logic
+    game_init(&master_game);
+    printf("Game Manager initialized and board shuffled.\n");
 
-        printf("Waiting for initial MQTT handshake...\n");
-        while (!is_mqtt_connected()) {
-            sleep_ms(250); // Pause here until the connection finishes
-            cyw43_arch_poll(); // Keep processing background network tasks
-        }
-}
-
-    uint32_t O = urgb_u32(8, 4, 0); // Orange
-        uint32_t W = urgb_u32(5, 5, 5); // White
-        uint32_t P = urgb_u32(8, 0, 4); // Pink (Nose)
-        uint32_t K = urgb_u32(0, 0, 0); // Black / Off
-
-        uint32_t cat_sprite[64] = {
-            O, K, K, K, K, K, K, O, 
-            O, O, K, K, K, K, O, O, 
-            O, O, O, O, O, O, O, O, 
-            O, K, W, O, O, K, W, O, 
-            O, O, O, P, P, O, O, O, 
-            O, K, O, O, O, O, K, O, 
-            K, O, O, O, O, O, O, K, 
-            K, K, O, O, O, O, K, K  
-        };
-
-   while (true) {
-        // 1. Check Wi-Fi Health
-        if (!is_wifi_connected()) {
-            printf("Wi-Fi connection lost! Waiting for hotspot...\n");
-            sleep_ms(2000); 
-        } 
-        // 2. Check MQTT Health
-        else if (!is_mqtt_connected()) {
-            printf("MQTT disconnected! Reconnecting to HiveMQ...\n");
-            cyw43_arch_lwip_begin();
-            init_mqtt_client("SE4_Pico_Node_1");
-            cyw43_arch_lwip_end();
-            sleep_ms(2000); 
-        } 
-        // 3. Network is healthy. Safe to render and publish!
-        else {
-            // Render LED frame
-            for (int i = 0; i < NUM_LEDS; ++i) {
-                put_pixel(cat_sprite[i]); 
-            }
-            
-            // Publish test message
-            cyw43_arch_lwip_begin();
-            publish_message("se4/memorygame/node1", "Node 1 is active!");
-            cyw43_arch_lwip_end();
-        }
-
-        // Required background hardware polling
-        cyw43_arch_poll(); 
-        sleep_ms(1000); // Control the loop speed
+    // 2. Create the FreeRTOS Mutex
+    game_state_mutex = xSemaphoreCreateMutex();
+    if (game_state_mutex == NULL) {
+        printf("CRITICAL ERROR: Failed to create Mutex!\n");
+        while(1); 
     }
+
+    // 3. Create the FreeRTOS Queue (Holds up to 10 tap events)
+    tap_event_queue = xQueueCreate(10, sizeof(uint8_t));
+    if (tap_event_queue == NULL) {
+        printf("CRITICAL ERROR: Failed to create Queue!\n");
+        while(1); 
+    }
+
+    // 4. Spawn the Game Logic Task at Priority 2
+    xTaskCreate(Game_Logic_Task, "GameLogic", 1024, NULL, 2, NULL);
+    //FAKE DUMMY TASK. DELETE WHEN DONE
+    // Spawn the temporary testing task
+    xTaskCreate(Dummy_Network_Task, "DummyNet", 1024, NULL, 3, NULL);
+
+    // 5. Hand control over to the FreeRTOS Operating System
+    printf("Starting FreeRTOS Scheduler...\n");
+    vTaskStartScheduler();
+
+    // The microcontroller will never reach this loop because FreeRTOS is now in control
+    while (true) {}
 }
