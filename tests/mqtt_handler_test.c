@@ -91,6 +91,7 @@ int main(void) {
     assert(connect_calls == 1 && allocations == 1);
     assert(!mqtt_configure_will("other", "offline", 10));
     connection_event(MQTT_CONNECT_ACCEPTED);
+    assert(mqtt_connection_generation() == (uint32_t)connect_calls);
     assert(!mqtt_is_ready());
     assert(strcmp(subscribed_topic, "arbitrary/input") == 0);
     acknowledge(ERR_MEM);
@@ -178,6 +179,7 @@ int main(void) {
     clock_ms += 5000;
     init_mqtt_client("test-client"); assert(connect_calls == 2 && allocations == 1);
     connection_event(MQTT_CONNECT_ACCEPTED);
+    assert(mqtt_connection_generation() == (uint32_t)connect_calls);
     acknowledge(ERR_OK);
     assert(!mqtt_is_ready());
     init_mqtt_client("test-client"); acknowledge(ERR_OK);
