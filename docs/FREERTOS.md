@@ -125,18 +125,9 @@ a deployment placeholder.
 
 ## Validation
 
-Queue tests use stubs to check copying, capacity, invalid/offline requests,
-binary receive routing, disconnect cleanup and failed-send accounting. They do
-not simulate the scheduler or radio. Run from the repository root:
-
-```powershell
-gcc -std=c11 -Wall -Wextra -Werror -Itests/rtos_stubs -Isrc/network tests/network_task_test.c src/network/network_task.c -o build/network_task_test.exe
-./build/network_task_test.exe
-```
-
 On hardware: verify both tasks continue during connection retries, send commands
 under sensor/LED load, disconnect/reconnect Wi-Fi and broker, measure stack high
-water marks and free heap, then test both nodes together. A successful build and
-host tests do not establish timing, latency or physical reliability.
+water marks and free heap, then test both nodes together. A successful build
+does not establish timing, latency or physical reliability.
 
 Reference: [Raspberry Pi FreeRTOS examples](https://github.com/raspberrypi/pico-examples/tree/master/pico_w/wifi/freertos).
