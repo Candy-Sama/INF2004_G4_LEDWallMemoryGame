@@ -45,7 +45,7 @@ static void application_task(void *arg) {
     printf("Master Game Manager initialized and board shuffled.\n");
 
     for (;;) {
-        // Farhah's default purple visual
+        // default purple visual
         for (int i = 0; i < NUM_LEDS; ++i) {
             put_pixel(urgb_u32(5, 0, 5));
         }
