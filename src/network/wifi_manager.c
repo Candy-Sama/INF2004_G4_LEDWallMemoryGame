@@ -1,18 +1,27 @@
 #include "wifi_manager.h"
-#include "wifi_creds.h"
 #include "pico/cyw43_arch.h"
 #include <stdio.h>
 
-bool wifi_init_and_connect(void) {
-    if (cyw43_arch_init()) {
-        printf("Wi-Fi init failed\n");
+static bool wifi_initialised;
+
+bool wifi_init_and_connect(const char *ssid, const char *password) {
+    if (ssid == NULL || ssid[0] == '\0' || password == NULL || password[0] == '\0') {
+        printf("Wi-Fi requires a network name and WPA2 password.\n");
         return false;
+    }
+    // A failed connection can be retried without initialising the SDK twice.
+    if (!wifi_initialised) {
+        if (cyw43_arch_init()) {
+            printf("Wi-Fi init failed\n");
+            return false;
+        }
+        wifi_initialised = true;
     }
 
     cyw43_arch_enable_sta_mode();
     printf("Connecting to Wi-Fi...\n");
     
-    if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 30000)) {
+    if (cyw43_arch_wifi_connect_timeout_ms(ssid, password, CYW43_AUTH_WPA2_AES_PSK, 30000)) {
         printf("Failed to connect to Wi-Fi.\n");
         return false;
     } 
@@ -21,6 +30,6 @@ bool wifi_init_and_connect(void) {
     return true;
 }
 
-bool is_wifi_connected() {
+bool is_wifi_connected(void) {
     return cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP;
 }

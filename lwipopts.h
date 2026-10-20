@@ -7,8 +7,16 @@
 
 // allow override in some examples
 #ifndef NO_SYS
-#define NO_SYS                      1
+#define NO_SYS                      0
 #endif
+#define LWIP_TCPIP_CORE_LOCKING      1
+#define TCPIP_THREAD_STACKSIZE       1024
+#define TCPIP_THREAD_PRIO            5
+#define TCPIP_MBOX_SIZE              16
+#define DEFAULT_RAW_RECVMBOX_SIZE    8
+#define DEFAULT_UDP_RECVMBOX_SIZE    8
+#define DEFAULT_TCP_RECVMBOX_SIZE    8
+#define DEFAULT_ACCEPTMBOX_SIZE      8
 // allow override in some examples
 #ifndef LWIP_SOCKET
 #define LWIP_SOCKET                 0
@@ -19,9 +27,12 @@
 // MEM_LIBC_MALLOC is incompatible with non polling versions
 #define MEM_LIBC_MALLOC             0
 #endif
+// Fits a maximum framework publish (95-byte topic + 256-byte payload).
+#define MQTT_OUTPUT_RINGBUF_SIZE    512
+
 #define MEM_ALIGNMENT               4
 #ifndef MEM_SIZE
-#define MEM_SIZE                    4000
+#define MEM_SIZE                    (16 * 1024)
 #endif
 #define MEMP_NUM_TCP_SEG            32
 #define MEMP_NUM_ARP_QUEUE          10
@@ -59,6 +70,8 @@
 #define LWIP_DEBUG                  1
 #define LWIP_STATS                  1
 #define LWIP_STATS_DISPLAY          1
+// Enable temporarily when diagnosing MQTT connection failures.
+#define MQTT_DEBUG                  LWIP_DBG_OFF
 #endif
 
 #define ETHARP_DEBUG                LWIP_DBG_OFF

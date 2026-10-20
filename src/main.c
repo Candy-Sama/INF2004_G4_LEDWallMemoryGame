@@ -1,5 +1,7 @@
 #include <stdio.h>
+#include <string.h>
 #include "pico/stdlib.h"
+#include "pico/unique_id.h"
 #include "hardware/i2c.h"
 #include "hardware/pio.h"
 #include "ws2812.pio.h" 
@@ -41,8 +43,6 @@ void Game_Logic_Task(void *pvParameters) {
                 game_process_input(&master_game, received_panel_id);
                 game_evaluate_match(&master_game);
                 
-                // (Mustaqim's network_publish command will go here later to broadcast the state)
-                
                 // 4. Unlock the Mutex so the Network task can use it again
                 xSemaphoreGive(game_state_mutex);
             }
@@ -50,7 +50,7 @@ void Game_Logic_Task(void *pvParameters) {
     }
 }
 
-// DUMMY IN PLACE TO TEST MASTER //
+// DUMMY TASK TO TEST MASTER LOGIC //
 void Dummy_Network_Task(void *pvParameters) {
     uint8_t fake_tap;
 
@@ -83,7 +83,7 @@ int main() {
     }
     sleep_ms(1000); 
     
-    printf("\n\n--- PICO W BOOT SEQUENCE (FreeRTOS) ---\n");
+    printf("\n\n--- PICO W MASTER BOOT SEQUENCE (FreeRTOS) ---\n");
 
     // Initialize I2C Hardware
     i2c_init(I2C_PORT, 400*1000);
@@ -119,8 +119,8 @@ int main() {
 
     // 4. Spawn the Game Logic Task at Priority 2
     xTaskCreate(Game_Logic_Task, "GameLogic", 1024, NULL, 2, NULL);
-    //FAKE DUMMY TASK. DELETE WHEN DONE
-    // Spawn the temporary testing task
+    
+    // Spawn the temporary testing task (Dummy network)
     xTaskCreate(Dummy_Network_Task, "DummyNet", 1024, NULL, 3, NULL);
 
     // 5. Hand control over to the FreeRTOS Operating System
