@@ -4,7 +4,6 @@
 #include "pico/unique_id.h"
 #include "hardware/i2c.h"
 #include "node_config.h"
-#include "wifi_manager.h"
 #include "wifi_creds.h" // Standard build: application supplies configured credentials.
 #include "network_task.h"
 #include "task.h"
@@ -97,12 +96,12 @@ static void apply_received_command(void) {
     static uint32_t previous_drops;
     uint32_t drops = network_drop_count();
     if (drops != previous_drops) {
-        printf("MQTT: %lu received messages discarded in total.\n", (unsigned long)drops);
+        printf("Network: %lu queued messages discarded in total.\n", (unsigned long)drops);
         previous_drops = drops;
     }
 }
 
-
+// Demo hardware/parser lives here; networking only transports its bytes.
 static void application_task(void *arg) {
     (void)arg;
     bool sensor_available = setup_sensor();
@@ -144,6 +143,7 @@ int main(void) {
     if (!network_task_start(&network) ||
         xTaskCreate(application_task, "Application", 1024, NULL, 2, NULL) != pdPASS)
         panic("Could not create application tasks");
+    // Start scheduling. Successful startup never returns to main().
     vTaskStartScheduler();
     panic("FreeRTOS scheduler returned");
 }

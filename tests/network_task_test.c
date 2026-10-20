@@ -4,8 +4,10 @@
 #include <string.h>
 #include <stdio.h>
 #include "network_task.h"
+#include "queue.h"
 
 struct test_queue { unsigned size, capacity, head, count; unsigned char *data; };
+static TickType_t observed_wait;
 QueueHandle_t xQueueCreate(unsigned count, unsigned size) {
     QueueHandle_t q = calloc(1, sizeof(*q));
     assert(q);
@@ -19,17 +21,12 @@ int xQueueSend(QueueHandle_t q, const void *item, TickType_t wait) {
     ++q->count; return pdPASS;
 }
 int xQueueReceive(QueueHandle_t q, void *item, TickType_t wait) {
-    (void)wait;
+    observed_wait = wait;
     if (!q->count) return 0;
     memcpy(item, q->data + q->head * q->size, q->size);
     q->head = (q->head + 1) % q->capacity; --q->count; return pdPASS;
 }
 void vQueueDelete(QueueHandle_t q) { free(q->data); free(q); }
-uint32_t *xEventGroupCreate(void) { return calloc(1, sizeof(uint32_t)); }
-uint32_t xEventGroupGetBits(uint32_t *g) { return *g; }
-uint32_t xEventGroupSetBits(uint32_t *g, uint32_t b) { return *g |= b; }
-uint32_t xEventGroupClearBits(uint32_t *g, uint32_t b) { return *g &= ~b; }
-void vEventGroupDelete(uint32_t *g) { free(g); }
 static void (*task_entry)(void *);
 static void *task_arg;
 static jmp_buf iteration;
@@ -91,6 +88,8 @@ int main(void) {
     mqtt_message_t m;
     assert(network_receive(&m, 0) && m.length == 3 && m.payload[1] == 0);
     assert(!network_receive(&m, 0));
+    assert(!network_receive(&m, pdMS_TO_TICKS(20)) && observed_wait == 20);
+    assert(!network_receive(NULL, 0));
     assert(network_publish("tap", "x", 1, 1, false));
     send_ok = false; step(); assert(network_drop_count() == 9);
     for (int i = 0; i < 9; ++i) { incoming = true; step(); }

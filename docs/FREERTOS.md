@@ -62,6 +62,36 @@ and display queues during integration. Do not call `mqtt_send`, `mqtt_receive`,
 Wi-Fi APIs or MQTT completion callbacks from other tasks. The original transport
 functions remain available inside the Network Task, with the same semantics.
 
+### Understanding `wait_ticks` and `&message`
+
+```c
+mqtt_message_t message;
+bool received = network_receive(&message, pdMS_TO_TICKS(20));
+```
+
+`message` is a variable holding one complete message. `&message` means "the
+address of that variable". Passing its address lets `network_receive` fill the
+original variable, rather than modifying a temporary copy. Read its topic,
+payload and length only when the function returns true.
+
+`wait_ticks` is the maximum time this calling task waits if the queue is empty:
+
+| Argument | Behaviour |
+| --- | --- |
+| `0` | Check once and return immediately |
+| `pdMS_TO_TICKS(20)` | Wait up to about 20 ms; return sooner if a message arrives |
+| `portMAX_DELAY` | Wait indefinitely in this configuration |
+
+FreeRTOS measures waiting in ticks. Our 1000 Hz tick is currently 1 ms, but
+always use `pdMS_TO_TICKS` to convert milliseconds if the tick rate changes.
+Waiting blocks only the caller; the Network Task and other ready tasks continue.
+Do not use an indefinite wait in a task that also needs periodic sensor work.
+
+Readiness uses one boolean protected by short critical sections. A separate
+event-group allocation is unnecessary because no task waits on readiness bits.
+The owner reuses a single message buffer while draining its queues, and limits
+each batch to keep other work responsive.
+
 Both queues hold eight copied messages (up to 95-byte topics/256-byte payloads).
 `network_publish` returns false immediately for invalid inputs, offline transport
 or full queue. Queued messages are dropped if sending fails; this starter does

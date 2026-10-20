@@ -1,14 +1,15 @@
 #ifndef FREERTOS_CONFIG_H
 #define FREERTOS_CONFIG_H
-#include <assert.h>
 #define configUSE_PREEMPTION 1
 #define configUSE_IDLE_HOOK 0
 #define configUSE_TICK_HOOK 0
 #define configUSE_TICKLESS_IDLE 0
 #define configCPU_CLOCK_HZ 125000000
+// 1000 ticks per second: currently one tick is 1 ms. Use pdMS_TO_TICKS anyway.
 #define configTICK_RATE_HZ 1000
 #define configMAX_PRIORITIES 8
 #define configMINIMAL_STACK_SIZE 256
+// Heap4 supplies task stacks, queues and SDK RTOS objects.
 #define configTOTAL_HEAP_SIZE (96 * 1024)
 #define configMAX_TASK_NAME_LEN 16
 #define configUSE_16_BIT_TICKS 0
@@ -26,6 +27,7 @@
 #define configTIMER_TASK_PRIORITY 4
 #define configTIMER_QUEUE_LENGTH 10
 #define configTIMER_TASK_STACK_DEPTH 512
+// Keep scheduling on core 0 for the first integration.
 #define configNUMBER_OF_CORES 1
 #define configTICK_CORE 0
 #define configUSE_CORE_AFFINITY 0
@@ -40,5 +42,6 @@
 #define INCLUDE_uxTaskGetStackHighWaterMark 1
 #define INCLUDE_xTimerPendFunctionCall 1
 #define INCLUDE_xSemaphoreGetMutexHolder 1
+// Remains active in Release builds; never compile away validation calls.
 #define configASSERT(x) do { if (!(x)) __builtin_trap(); } while (0)
 #endif

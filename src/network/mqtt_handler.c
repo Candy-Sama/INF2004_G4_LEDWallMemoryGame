@@ -30,7 +30,7 @@ static bool subscription_pending;
 static bool subscription_retry_wait;
 static u32_t subscription_failed_ms;
 
-// Callback producer / main-loop consumer. All accesses use the lwIP lock.
+// lwIP callback producer / Network Task consumer. All accesses use the lwIP lock.
 static mqtt_message_t rx_queue[MQTT_RX_QUEUE_CAPACITY];
 static size_t rx_head, rx_count;
 static mqtt_message_t incoming;
@@ -115,7 +115,7 @@ static void subscription_cb(void *arg, err_t result) {
     }
 }
 
-// Service subscriptions, one at a time. This is called from the main loop.
+// Service subscriptions, one at a time. This is called with the lwIP lock held.
 static void service_subscriptions(void) {
     if (subscription_pending) return;
     if (subscription_retry_wait &&
@@ -158,7 +158,7 @@ static void mqtt_connection_cb(mqtt_client_t *mqtt, void *arg, mqtt_connection_s
     }
 }
 
-// Method to connect to the broker at the given address. Called from lwIP's TCP thread.
+// Connect after DNS resolves, either in the Network Task or DNS callback; locked.
 static void connect_to_broker(const ip_addr_t *address, const char *client_id) {
     client_info.client_id = client_id;
     client_info.keep_alive = keep_alive_seconds;
@@ -181,7 +181,7 @@ static void dns_found_cb(const char *name, const ip_addr_t *address, void *arg) 
     }
 }
 
-// Service the MQTT connection, including DNS resolution and connection attempts. Called from the main loop.
+// Service the MQTT connection, including DNS resolution and connection attempts. Called by the Network Task with the lwIP lock held.
 static void service_connection(const char *client_id) {
     if (client && mqtt_client_is_connected(client)) {
         service_subscriptions();
@@ -207,7 +207,7 @@ static void service_connection(const char *client_id) {
     }
 }
 
-// Initialize the MQTT client with the given client ID. Called from the main loop.
+// Network Task entry point: take the lwIP lock before servicing the client.
 void init_mqtt_client(const char *client_id) {
     if (client_id == NULL || client_id[0] == '\0') return;
     cyw43_arch_lwip_begin();
@@ -215,7 +215,8 @@ void init_mqtt_client(const char *client_id) {
     cyw43_arch_lwip_end();
 }
 
-//Method to configure the MQTT "will" message, which is sent by the broker if the client disconnects unexpectedly. Called from the main loop.
+// Save the broker's disconnect announcement before the first connection attempt.
+// The public function acquires its own lwIP lock.
 bool mqtt_configure_will(const char *topic, const char *payload, uint16_t keep_alive) {
     if (!valid_topic(topic, false) || payload == NULL ||
         strlen(payload) > MQTT_PAYLOAD_MAX_LENGTH || keep_alive == 0) return false;
@@ -234,12 +235,13 @@ bool mqtt_configure_will(const char *topic, const char *payload, uint16_t keep_a
     return accepted;
 }
 
-// Subscribe to a topic with QoS 0. Returns true if the subscription was accepted or already active, false otherwise. Called from the main loop.
+// Compatibility wrapper: register a filter at QoS 0.
 bool mqtt_subscribe_topic(const char *topic) {
     return mqtt_subscribe_topic_qos(topic, 0);
 }
 
-// Subscribe to a topic with the given QoS (0 or 1). Returns true if the subscription was accepted or already active, false otherwise. Called from the main loop.
+// Copy a filter into the local registry. Broker acknowledgement happens later;
+// registration success does not yet mean the subscription is active.
 bool mqtt_subscribe_topic_qos(const char *topic, uint8_t qos) {
     if (!valid_topic(topic, true) || qos > 1) return false;
     cyw43_arch_lwip_begin();
