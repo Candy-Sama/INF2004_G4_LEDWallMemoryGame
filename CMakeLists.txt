@@ -41,9 +41,8 @@ set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/FreeRTOS-Kernel)
 add_executable(LED_MEMORY_GAME 
     src/main.c
     src/display/ledmatrix.c
-    src/gameengine/core.c
-    src/gameengine/memory.c
     src/network/mqtt_handler.c
+    src/network/network_task.c
     src/network/wifi_manager.c
     src/sensors/imudriver.c
 )
@@ -69,12 +68,12 @@ target_link_libraries(LED_MEMORY_GAME
     pico_stdlib
     hardware_i2c
     hardware_pio
-    hardware_dma
-    hardware_timer
-    pico_cyw43_arch_lwip_threadsafe_background
+    pico_unique_id
+    pico_cyw43_arch_lwip_sys_freertos
     pico_lwip_mqtt
     freertos_kernel_rp2040  # <--- NEW: LINK FREERTOS TO YOUR EXECUTABLE
 )
+target_compile_definitions(LED_MEMORY_GAME PRIVATE ASYNC_CONTEXT_DEFAULT_FREERTOS_TASK_STACK_SIZE=1024)
 
 pico_add_extra_outputs(LED_MEMORY_GAME)
 
