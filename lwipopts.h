@@ -7,8 +7,16 @@
 
 // allow override in some examples
 #ifndef NO_SYS
-#define NO_SYS                      1
+#define NO_SYS                      0
 #endif
+#define LWIP_TCPIP_CORE_LOCKING      1
+#define TCPIP_THREAD_STACKSIZE       1024
+#define TCPIP_THREAD_PRIO            5
+#define TCPIP_MBOX_SIZE              16
+#define DEFAULT_RAW_RECVMBOX_SIZE    8
+#define DEFAULT_UDP_RECVMBOX_SIZE    8
+#define DEFAULT_TCP_RECVMBOX_SIZE    8
+#define DEFAULT_ACCEPTMBOX_SIZE      8
 // allow override in some examples
 #ifndef LWIP_SOCKET
 #define LWIP_SOCKET                 0
@@ -24,7 +32,7 @@
 
 #define MEM_ALIGNMENT               4
 #ifndef MEM_SIZE
-#define MEM_SIZE                    4000
+#define MEM_SIZE                    (16 * 1024)
 #endif
 #define MEMP_NUM_TCP_SEG            32
 #define MEMP_NUM_ARP_QUEUE          10

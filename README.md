@@ -1,5 +1,15 @@
 # MQTT framework and two-board demo
 
+## FreeRTOS starter (current firmware)
+
+See [FreeRTOS networking and teammate API](docs/FREERTOS.md). The firmware now
+starts a Network Task and an Application Task. Other tasks use `network_publish`
+and `network_receive`; low-level MQTT APIs belong only to the Network Task.
+Download the pinned FreeRTOS dependency as described in that guide before building.
+USB serial is no longer required to start the firmware. Earlier main-loop API
+examples below describe the low-level transport, not direct calls from other tasks.
+
+
 ## MQTT feedback update
 
 Start with the beginner-friendly [protocol and ownership guide](docs/MQTT_PROTOCOL.md)
@@ -37,7 +47,7 @@ numbers are not built into the MQTT framework.
 The standard firmware uses `WIFI_SSID` and `WIFI_PASSWORD` from
 `config/wifi_creds.h`. `main.c` supplies them to
 `wifi_init_and_connect(WIFI_SSID, WIFI_PASSWORD)`. Open the USB serial monitor
-to start the board; no credential-entry prompt appears. Changing the configured
+to observe the board; no credential-entry prompt appears. Changing the configured
 network requires rebuilding and reflashing. The connection attempt can take up
 to 30 seconds. On startup failure, check the settings/network and restart.
 
@@ -68,7 +78,7 @@ is active and flash persistence are not implemented.
 ## Interface for teammates
 
 Include `mqtt_handler.h`. Initialise the Wi-Fi architecture before using the
-MQTT APIs. Call them from the main loop; locks are handled inside the module.
+MQTT APIs. Only the Network Task calls the low-level APIs; locks are handled inside the module.
 
 ```c
 // After wifi_init_and_connect(ssid, password) succeeds:
@@ -158,7 +168,7 @@ the demo does not monitor all required boards or pause gameplay.
 The MQTT module has no dependency on `node_config.h`, sensor code or LED code.
 Its callbacks only collect data and update networking state. Application code
 pops messages in the main loop and performs hardware/game actions there.
-The Pico SDK services networking in the background; this demo is not FreeRTOS.
+The Pico SDK services networking using its FreeRTOS-aware backend.
 Game-engine and audio files remain unfinished team placeholders.
 
 ```mermaid
@@ -188,7 +198,7 @@ For future builds, set NODE_ID to the intended board, compile, then flash
 do not refresh the separately labelled snapshot files. The current source is
 set to Node 1. Do not flash Node 1's firmware onto both boards.
 
-Both boards wait for a USB serial monitor at startup. COM numbers may
+Both boards now boot without waiting for a USB serial monitor. COM numbers may
 change after flashing, and only one serial monitor can open each port. Closing
 its connection after startup does not stop the firmware. Avoid sharing screenshots of your terminal password-entry box.
 
