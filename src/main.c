@@ -59,11 +59,26 @@ int main() {
         }
 }
 
+    uint32_t O = urgb_u32(8, 4, 0); // Orange
+        uint32_t W = urgb_u32(5, 5, 5); // White
+        uint32_t P = urgb_u32(8, 0, 4); // Pink (Nose)
+        uint32_t K = urgb_u32(0, 0, 0); // Black / Off
+
+        uint32_t cat_sprite[64] = {
+            O, K, K, K, K, K, K, O, 
+            O, O, K, K, K, K, O, O, 
+            O, O, O, O, O, O, O, O, 
+            O, K, W, O, O, K, W, O, 
+            O, O, O, P, P, O, O, O, 
+            O, K, O, O, O, O, K, O, 
+            K, O, O, O, O, O, O, K, 
+            K, K, O, O, O, O, K, K  
+        };
+
    while (true) {
         // 1. Check Wi-Fi Health
         if (!is_wifi_connected()) {
             printf("Wi-Fi connection lost! Waiting for hotspot...\n");
-            // Optional: call wifi_init_and_connect() here if it supports auto-retries
             sleep_ms(2000); 
         } 
         // 2. Check MQTT Health
@@ -78,7 +93,7 @@ int main() {
         else {
             // Render LED frame
             for (int i = 0; i < NUM_LEDS; ++i) {
-                put_pixel(urgb_u32(5, 0, 5)); 
+                put_pixel(cat_sprite[i]); 
             }
             
             // Publish test message
