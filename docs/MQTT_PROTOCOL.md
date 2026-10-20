@@ -153,10 +153,12 @@ only record a flag or notify a task; never render, block, or re-enter MQTT APIs.
 No callback is guaranteed after connection loss. Resolve uncertain delivery via
 application synchronisation. The old send/subscribe APIs remain QoS 0 wrappers.
 
-Current `main.c` remains the two-board colour demo using legacy topics. It now
-registers retained `offline` Last Will and publishes retained `online` status on
-`se4/memorygame/nodeN/status`; it does not implement the v1 JSON game protocol.
-All other existing demo commands remain unretained QoS 0.
+Current `main.c` remains a colour-and-tap demo using legacy topics. The Network
+Task registers a retained `offline` Last Will and publishes retained `online`
+status on `se4/memorygame/nodeN/status`. The application queues
+`TAP DETECTED` on `se4/memorygame/nodeN/tap` at QoS 1 without retaining it.
+Command messages are received but not yet handled. These demo messages do not
+implement the v1 JSON game protocol.
 
 ## 7. FreeRTOS integration contract
 

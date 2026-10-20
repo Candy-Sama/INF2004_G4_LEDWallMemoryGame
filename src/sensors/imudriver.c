@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdbool.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "hardware/gpio.h"
@@ -15,7 +16,7 @@
 #define I2C_PORT i2c0
 #define I2C_SDA_PIN 0
 #define I2C_SCL_PIN 1
-#define IMU_INT_PIN 2          // Example: The Pico pin connected to the IMU's INT output
+#define IMU_INT_PIN 3          // GP2 is used by the WS2812 panel.
 #define DEBOUNCE_DELAY_MS 400  // Ignore physical vibrations for 400ms after a tap
 
 // Global handles
@@ -30,7 +31,8 @@ uint8_t currentNodeId = 0; // Will be set during initialization
    hardware detects a physical shock and pulses the INT pin.
    ========================================================================== */
 void imu_gpio_isr(uint gpio, uint32_t events) {
-    if (gpio == IMU_INT_PIN) {
+    (void)events;
+    if (gpio == IMU_INT_PIN && sensorTaskHandle != NULL) {
         BaseType_t xHigherPriorityTaskWoken = pdFALSE;
         
         // Instantly wake up the sleeping FreeRTOS Sensor Task
@@ -47,8 +49,10 @@ void imu_gpio_isr(uint gpio, uint32_t events) {
    packs the bits, and safely queues the data for the Network Task.
    ========================================================================== */
 void IMUSensorTask(void *pvParameters) {
+    (void)pvParameters;
     CompactTapData tapData;
     TickType_t lastTapTime = 0;
+    bool has_tapped = false;
 
     for (;;) {
         // Sleep indefinitely until the hardware ISR sends a notification
@@ -58,8 +62,10 @@ void IMUSensorTask(void *pvParameters) {
 
         // Software Debounce: Ignore if it hasn't been long enough since the last tap
         // This solves the "vibrating shared wall" and "double-tap" risks
-        if ((currentTime - lastTapTime) > pdMS_TO_TICKS(DEBOUNCE_DELAY_MS)) {
+        if (!has_tapped ||
+            (currentTime - lastTapTime) >= pdMS_TO_TICKS(DEBOUNCE_DELAY_MS)) {
             lastTapTime = currentTime;
+            has_tapped = true;
 
             // Pack the Minimum-Bit Data Representation (Change Req 1)
             tapData.node_id = currentNodeId;
@@ -69,7 +75,9 @@ void IMUSensorTask(void *pvParameters) {
 
             // Send BY VALUE to the FreeRTOS Queue to prevent Race Conditions
             if (tapEventQueue != NULL) {
-                xQueueSend(tapEventQueue, &tapData, 0);
+                if (xQueueSend(tapEventQueue, &tapData, 0) != pdPASS) {
+                    printf("Tap queue full; tap was dropped.\n");
+                }
             }
             
             printf("Valid tap detected on Node %d! Data packed and queued.\n", currentNodeId);
@@ -99,7 +107,12 @@ void imu_init(uint8_t node_id) {
     gpio_set_dir(IMU_INT_PIN, GPIO_IN);
     
     // Create the FreeRTOS Task (Stack size 256, Priority 3)
-    xTaskCreate(IMUSensorTask, "IMUSensorTask", 256, NULL, 3, &sensorTaskHandle);
+    if (xTaskCreate(IMUSensorTask, "IMUSensorTask", 256, NULL, 3,
+                    &sensorTaskHandle) != pdPASS) {
+        sensorTaskHandle = NULL;
+        printf("Could not create IMU sensor task.\n");
+        return;
+    }
 
     // Attach the hardware ISR to the INT pin (Falling or Rising edge depends on your IMU model)
     gpio_set_irq_enabled_with_callback(IMU_INT_PIN, GPIO_IRQ_EDGE_FALL, true, &imu_gpio_isr);

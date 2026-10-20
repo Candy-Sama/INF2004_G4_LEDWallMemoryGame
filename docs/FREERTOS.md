@@ -1,9 +1,9 @@
 # FreeRTOS networking starter
 
 The firmware now starts the FreeRTOS scheduler, not a main-loop superloop.
-Two application-owned tasks run on core 0. SDK tasks service lwIP and CYW43;
-"one network owner" means one caller of our Wi-Fi/MQTT APIs, not one task inside
-the complete networking stack.
+Three application-owned tasks run on core 0: Network, Application, and IMU
+Sensor. SDK tasks service lwIP and CYW43; "one network owner" means one caller
+of our Wi-Fi/MQTT APIs, not one task inside the complete networking stack.
 
 ```text
 Application Task -- network_publish() --> TX queue --> Network Task --> MQTT
@@ -13,14 +13,18 @@ Application Task <-- network_receive() -- RX queue <-- Network Task <-- MQTT
 `main()` creates queues and tasks, then calls `vTaskStartScheduler()`.
 Network Task initialises Wi-Fi after the scheduler starts, configures the Will
 and command subscription, services MQTT, publishes demo presence, and transfers
-bytes between queues. Application Task owns IMU/LED hardware and interprets the
-demo RED/GREEN/OFF messages. Neither MQTT nor Network Task parses game commands.
+bytes between queues. The IMU Sensor Task queues debounced taps. The Application
+Task drives the LED demo, publishes each tap as `TAP DETECTED` to
+`se4/memorygame/nodeN/tap` at QoS 1 without retaining it, and drains incoming
+commands while logging that they are not yet handled. Neither MQTT nor Network
+Task parses game commands.
 
-Both loops block for 10 ms using `vTaskDelay()`, allowing other ready tasks to
-run. Network priority is 3, application priority 2, SDK async/timer priority 4,
-lwIP TCP/IP priority 5. These are initial settings, not measured deadlines.
-Sensor/display are still combined in the example Application Task; teammates
-can split them later. No game task is implemented here.
+The Network and Application tasks block for 10 ms using `vTaskDelay()`, allowing
+other ready tasks to run. Network and sensor priorities are 3, application
+priority is 2, SDK async priority is 4, and lwIP TCP/IP priority is 5. The timer
+daemon priority is 3. These are initial settings, not measured deadlines. The
+display remains in the Application Task; dedicated game/display queues are team
+integration work. No game task is implemented here.
 
 ## Build dependency
 
@@ -39,6 +43,8 @@ existing installation. Build with the existing Pico SDK toolchain and target
 FreeRTOS heap is 96 KiB; lwIP heap is 16 KiB. Stack/heap sizes need measurement
 on hardware. Allocation and stack-overflow hooks fail visibly instead of hiding
 the failure. UART logging remains disabled because GP0/GP1 are used for I2C.
+GP2 is the WS2812 data output and GP3 is the IMU interrupt input; wire the IMU
+interrupt signal to GP3.
 
 ## Calls for teammates
 

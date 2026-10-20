@@ -1,131 +1,89 @@
-/* NOTE FROM AFI: make sure to downaloed the FreeRTOS Kernel. Use this command in the terminal.
-mkdir lib
-cd lib
-git clone --recurse-submodules https://github.com/FreeRTOS/FreeRTOS-Kernel.git
-cd .. 
-*/
-
 #include <stdio.h>
 #include <string.h>
-#include "pico/stdlib.h"
-#include "pico/unique_id.h"
-#include "hardware/i2c.h"
-#include "hardware/dma.h"
-#include "hardware/pio.h"
-#include "pico/cyw43_arch.h"
-#include "ws2812.pio.h" 
-#include "mqtt_handler.h"
-#include "wifi_manager.h"
 
-// --- ADDED FREERTOS & IMU INCLUDES ---
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#include "hardware/pio.h"
+#include "pico/stdlib.h"
+#include "ws2812.pio.h"
+#include "FreeRTOSConfig.h"
+#include "wifi_creds.h"
+#include "node_config.h"
+#include "ledmatrix.h"
 #include "imudriver.h"
+#include "network_task.h"
 
-#define LED_PIN 2       
-#define NUM_LEDS 64     
-// Removed I2C pin definitions from here, as imu_init() handles them now
+#define TAP_QUEUE_LENGTH 10
+#define APPLICATION_PRIORITY 2
+#define APPLICATION_STACK_WORDS 1024
+#define APPLICATION_INTERVAL_MS 100
 
-// --- ADDED GLOBAL QUEUE ---
 QueueHandle_t tapEventQueue;
 
-static inline void put_pixel(uint32_t pixel_grb) {
-    pio_sm_put_blocking(pio0, 0, pixel_grb << 8u);
-}
+static const network_task_config_t network_config = {
+    .ssid = WIFI_SSID,
+    .password = WIFI_PASSWORD,
+    .client_id = "SE4_Pico_Node_" NODE_STRING(NODE_ID),
+    .subscription = MQTT_COMMAND_TOPIC,
+    .status_topic = MQTT_PRESENCE_TOPIC,
+};
 
-static inline uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b) {
-    return ((uint32_t)(r) << 8) | ((uint32_t)(g) << 16) | (uint32_t)(b);
-}
+static void application_task(void *arg) {
+    (void)arg;
+    led_init();
 
-/* ==========================================================================
-   NETWORK & DISPLAY TASK
-   ========================================================================== */
-void NetworkDisplayTask(void *pvParameters) {
-    // PIO WS2812 Initialization
-    PIO pio = pio0;
-    int sm = 0;
-    uint offset = pio_add_program(pio, &ws2812_program);
-    ws2812_program_init(pio, sm, offset, LED_PIN, 800000, false);
-    printf("Loaded WS2812 PIO program at %d on GP%d\n", offset, LED_PIN);
-
-    // Network Setup
-    if (wifi_init_and_connect()) {
-        cyw43_arch_lwip_begin();
-        init_mqtt_client("SE4_Pico_Node_1");
-        cyw43_arch_lwip_end();
-
-        printf("Waiting for initial MQTT handshake...\n");
-        while (!is_mqtt_connected()) {
-            vTaskDelay(pdMS_TO_TICKS(250)); // Replaced sleep_ms with FreeRTOS delay
-            cyw43_arch_poll(); 
+    for (;;) {
+        for (int i = 0; i < NUM_LEDS; ++i) {
+            put_pixel(urgb_u32(5, 0, 5));
         }
-    }
 
-    // The main loop for this specific task
-    while (true) {
-        if (!is_wifi_connected()) {
-            printf("Wi-Fi connection lost! Waiting for hotspot...\n");
-            vTaskDelay(pdMS_TO_TICKS(2000)); 
-        } 
-        else if (!is_mqtt_connected()) {
-            printf("MQTT disconnected! Reconnecting to HiveMQ...\n");
-            cyw43_arch_lwip_begin();
-            init_mqtt_client("SE4_Pico_Node_1");
-            cyw43_arch_lwip_end();
-            vTaskDelay(pdMS_TO_TICKS(2000)); 
-        } 
-        else {
-            // Render LED frame
-            for (int i = 0; i < NUM_LEDS; ++i) {
-                put_pixel(urgb_u32(5, 0, 5)); 
-            }
-            
-            // --- NEW: Check the FreeRTOS Queue for taps from your IMU Task ---
-            CompactTapData receivedTap;
-            // Only publish if a tap was actually detected (0 block time means it doesn't wait)
-            if (xQueueReceive(tapEventQueue, &receivedTap, 0) == pdPASS) {
-                if (receivedTap.tap_event == 1) {
-                    cyw43_arch_lwip_begin();
-                    // In the future, Mustaqim will update this to send the compact binary payload
-                    publish_message("se4/memorygame/node1", "TAP DETECTED");
-                    cyw43_arch_lwip_end();
-                }
+        CompactTapData tap;
+        if (xQueueReceive(tapEventQueue, &tap, 0) == pdPASS &&
+            tap.tap_event && !tap.imu_fault) {
+            static const char payload[] = "TAP DETECTED";
+            if (!network_publish(MQTT_TAP_TOPIC, payload, sizeof(payload) - 1,
+                                 1, false)) {
+                printf("Could not queue MQTT tap publication.\n");
             }
         }
 
-        cyw43_arch_poll(); 
-        vTaskDelay(pdMS_TO_TICKS(100)); // Free the CPU for the IMU task
+        mqtt_message_t incoming;
+        while (network_receive(&incoming, 0)) {
+            printf("Received unhandled MQTT message on %s (%lu bytes).\n",
+                   incoming.topic, (unsigned long)incoming.length);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(APPLICATION_INTERVAL_MS));
     }
 }
 
-/* ==========================================================================
-   MAIN ENTRY POINT
-   ========================================================================== */
-int main() {
+int main(void) {
     stdio_init_all();
-    
-    while (!stdio_usb_connected()) {
-        sleep_ms(100);
+    printf("\n--- Pico W boot ---\n");
+
+    tapEventQueue = xQueueCreate(TAP_QUEUE_LENGTH, sizeof(CompactTapData));
+    if (tapEventQueue == NULL) {
+        printf("Could not create tap event queue.\n");
+        return 1;
     }
-    sleep_ms(1000); 
-    
-    printf("\n\n--- PICO W BOOT SEQUENCE ---\n");
 
-    // 1. Create the FreeRTOS Queue for your compact bit-field struct
-    tapEventQueue = xQueueCreate(10, sizeof(CompactTapData));
+    if (!network_task_start(&network_config)) {
+        printf("Could not start network task.\n");
+        return 1;
+    }
 
-    // 2. Initialize your IMU module (This also creates the IMUSensorTask inside imudriver.c)
-    // Note: I removed the redundant raw i2c_init code from main() since imu_init handles it
-    imu_init(1); // Passing '1' as the Node ID
+    imu_init(NODE_ID);
 
-    // 3. Create the Network & Display task
-    xTaskCreate(NetworkDisplayTask, "NetDisplayTask", 1024, NULL, 2, NULL);
+    if (xTaskCreate(application_task, "Application", APPLICATION_STACK_WORDS,
+                    NULL, APPLICATION_PRIORITY, NULL) != pdPASS) {
+        printf("Could not create application task.\n");
+        return 1;
+    }
 
-    // 4. Start the FreeRTOS Scheduler (Main thread ends here and tasks take over)
-    printf("Starting FreeRTOS Scheduler...\n");
+    printf("Starting FreeRTOS scheduler.\n");
     vTaskStartScheduler();
 
-    // The code should never reach this point
-    while(1);
+    printf("FreeRTOS scheduler returned unexpectedly.\n");
+    return 1;
 }

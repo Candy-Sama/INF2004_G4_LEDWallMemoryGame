@@ -33,9 +33,12 @@ project(LED_MEMORY_GAME C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-# --- NEW: INCLUDE FREERTOS KERNEL ---
-set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/FreeRTOS-Kernel)
-# (i will change this later)include(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/freertos_kernel_rp2040.cmake)
+# FreeRTOS is kept outside version control; callers may provide another install.
+set(FREERTOS_KERNEL_PATH
+    "${CMAKE_CURRENT_LIST_DIR}/lib/FreeRTOS-Kernel"
+    CACHE PATH "Path to the FreeRTOS Kernel")
+set(FREERTOS_CONFIG_FILE_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/config")
+include("${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/FreeRTOS_Kernel_import.cmake")
 
 # Add executable. Default name is the project name, version 0.1
 add_executable(LED_MEMORY_GAME 
@@ -74,7 +77,7 @@ target_link_libraries(LED_MEMORY_GAME
     pico_unique_id
     pico_cyw43_arch_lwip_sys_freertos
     pico_lwip_mqtt
-    freertos_kernel_rp2040  # <--- NEW: LINK FREERTOS TO YOUR EXECUTABLE
+    FreeRTOS-Kernel-Heap4
 )
 target_compile_definitions(LED_MEMORY_GAME PRIVATE ASYNC_CONTEXT_DEFAULT_FREERTOS_TASK_STACK_SIZE=1024)
 

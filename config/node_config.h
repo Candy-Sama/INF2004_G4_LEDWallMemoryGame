@@ -27,6 +27,7 @@
 #define MQTT_STATUS_TOPIC "se4/memorygame/node" NODE_STRING(NODE_ID)
 #define MQTT_COMMAND_TOPIC MQTT_STATUS_TOPIC "/command"
 #define MQTT_PRESENCE_TOPIC MQTT_STATUS_TOPIC "/status"
+#define MQTT_TAP_TOPIC MQTT_STATUS_TOPIC "/tap"
 #define MQTT_STATUS_MESSAGE "online"
 #define MQTT_PEER_COMMAND_TOPIC "se4/memorygame/node" NODE_STRING(PEER_NODE_ID) "/command"
 
