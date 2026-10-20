@@ -33,14 +33,20 @@ project(LED_MEMORY_GAME C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
+# Pinned dependency; see docs/FREERTOS.md for the one-time download command.
+set(FREERTOS_KERNEL_PATH "${CMAKE_CURRENT_LIST_DIR}/lib/FreeRTOS-Kernel" CACHE PATH "FreeRTOS kernel source")
+if(NOT EXISTS "${FREERTOS_KERNEL_PATH}/tasks.c")
+    message(FATAL_ERROR "FreeRTOS kernel missing. Follow docs/FREERTOS.md or set FREERTOS_KERNEL_PATH.")
+endif()
+include(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/FreeRTOS_Kernel_import.cmake)
+
 # Add executable. Default name is the project name, version 0.1
 
 add_executable(LED_MEMORY_GAME 
     src/main.c
     src/display/ledmatrix.c
-    src/gameengine/core.c
-    src/gameengine/memory.c
     src/network/mqtt_handler.c
+    src/network/network_task.c
     src/network/wifi_manager.c
     src/sensors/imudriver.c
 )
@@ -54,10 +60,6 @@ pico_generate_pio_header(LED_MEMORY_GAME ${CMAKE_CURRENT_LIST_DIR}/src/display/w
 # Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(LED_MEMORY_GAME 0)
 pico_enable_stdio_usb(LED_MEMORY_GAME 1)
-
-# Add the standard library to the build
-target_link_libraries(LED_MEMORY_GAME
-        pico_stdlib)
 
 # Add the standard include files to the build
 target_include_directories(LED_MEMORY_GAME PRIVATE
@@ -74,13 +76,11 @@ target_link_libraries(LED_MEMORY_GAME
     pico_stdlib
     hardware_i2c
     hardware_pio
-    hardware_dma
-    hardware_timer
-    pico_cyw43_arch_lwip_threadsafe_background
+    pico_unique_id
+    pico_cyw43_arch_lwip_sys_freertos
     pico_lwip_mqtt
+    FreeRTOS-Kernel-Heap4
 )
+target_compile_definitions(LED_MEMORY_GAME PRIVATE ASYNC_CONTEXT_DEFAULT_FREERTOS_TASK_STACK_SIZE=1024)
 
 pico_add_extra_outputs(LED_MEMORY_GAME)
-
-pico_enable_stdio_usb(LED_MEMORY_GAME 1)
-pico_enable_stdio_uart(LED_MEMORY_GAME 0)

@@ -1,94 +1,149 @@
 #include <stdio.h>
+#include <string.h>
 #include "pico/stdlib.h"
+#include "pico/unique_id.h"
 #include "hardware/i2c.h"
-#include "hardware/dma.h"
-#include "hardware/pio.h"
-#include "pico/cyw43_arch.h"
-#include "ws2812.pio.h" 
-#include "mqtt_handler.h"
-#include "wifi_manager.h" // Added your new Wi-Fi module
+#include "node_config.h"
+#include "wifi_creds.h" // Standard build: application supplies configured credentials.
+#include "network_task.h"
+#include "task.h"
+#include "imudriver.h"
+#include "motion_detector.h"
+#include "ledmatrix.h"
 
-#define LED_PIN 2       
-#define NUM_LEDS 64     
 #define I2C_PORT i2c0
-#define I2C_SDA 8
-#define I2C_SCL 9
+#define I2C_SDA 0
+#define I2C_SCL 1
 
-static inline void put_pixel(uint32_t pixel_grb) {
-    pio_sm_put_blocking(pio0, 0, pixel_grb << 8u);
-}
-
-static inline uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b) {
-    return ((uint32_t)(r) << 8) | ((uint32_t)(g) << 16) | (uint32_t)(b);
-}
-
-int main() {
-    stdio_init_all();
-    
-    while (!stdio_usb_connected()) {
-        sleep_ms(100);
-    }
-    sleep_ms(1000); // Give the UI 1 second to catch up
-    
-    printf("\n\n--- PICO W BOOT SEQUENCE ---\n");
-
-    // I2C Initialisation for IMU
-    i2c_init(I2C_PORT, 400*1000);
+static bool setup_sensor(void) {
+    i2c_init(I2C_PORT, 400 * 1000);
     gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
     gpio_pull_up(I2C_SDA);
     gpio_pull_up(I2C_SCL);
-
-    // PIO WS2812 Initialization
-    PIO pio = pio0;
-    int sm = 0;
-    uint offset = pio_add_program(pio, &ws2812_program);
-    ws2812_program_init(pio, sm, offset, LED_PIN, 800000, false);
-    printf("Loaded WS2812 PIO program at %d on GP%d\n", offset, LED_PIN);
-
-    // Network Setup using the new subsystem
-    if (wifi_init_and_connect()) {
-        cyw43_arch_lwip_begin();
-        init_mqtt_client("SE4_Pico_Node_1");
-        cyw43_arch_lwip_end();
-
-        printf("Waiting for initial MQTT handshake...\n");
-        while (!is_mqtt_connected()) {
-            sleep_ms(250); // Pause here until the connection finishes
-            cyw43_arch_poll(); // Keep processing background network tasks
-        }
+    printf("IMU: SDA=GP%d, SCL=GP%d\n", I2C_SDA, I2C_SCL);
+    return imu_init(I2C_PORT);
 }
 
-   while (true) {
-        // 1. Check Wi-Fi Health
-        if (!is_wifi_connected()) {
-            printf("Wi-Fi connection lost! Waiting for hotspot...\n");
-            // Optional: call wifi_init_and_connect() here if it supports auto-retries
-            sleep_ms(2000); 
-        } 
-        // 2. Check MQTT Health
-        else if (!is_mqtt_connected()) {
-            printf("MQTT disconnected! Reconnecting to HiveMQ...\n");
-            cyw43_arch_lwip_begin();
-            init_mqtt_client("SE4_Pico_Node_1");
-            cyw43_arch_lwip_end();
-            sleep_ms(2000); 
-        } 
-        // 3. Network is healthy. Safe to render and publish!
-        else {
-            // Render LED frame
-            for (int i = 0; i < NUM_LEDS; ++i) {
-                put_pixel(urgb_u32(5, 0, 5)); 
-            }
-            
-            // Publish test message
-            cyw43_arch_lwip_begin();
-            publish_message("se4/memorygame/node1", "Node 1 is active!");
-            cyw43_arch_lwip_end();
-        }
-
-        // Required background hardware polling
-        cyw43_arch_poll(); 
-        sleep_ms(1000); // Control the loop speed
+// Runs in the Application Task, not in a network callback.
+static bool read_movement(void) {
+    static absolute_time_t next_read;
+    static motion_detector_t detector;
+#if IMU_LOG_READINGS
+    static absolute_time_t next_print;
+#endif
+    if (!time_reached(next_read)) {
+        return false;
     }
+    next_read = make_timeout_time_ms(10);
+
+    imu_acceleration_t sample;
+    imu_read_result_t result = imu_read_acceleration(&sample);
+    if (result == IMU_READ_ERROR) {
+        detector.initialised = false;
+        next_read = make_timeout_time_ms(500);
+        return false;
+    }
+    if (result != IMU_NEW_DATA) {
+        return false;
+    }
+#if IMU_LOG_READINGS
+    if (time_reached(next_print)) {
+        printf("Node %d IMU: X=%d mg Y=%d mg Z=%d mg\n",
+               NODE_ID, sample.x_mg, sample.y_mg, sample.z_mg);
+        next_print = make_timeout_time_ms(500);
+    }
+#endif
+    return motion_detector_update(&detector, sample.x_mg, sample.y_mg,
+                                  sample.z_mg, to_ms_since_boot(get_absolute_time()));
+}
+
+static void send_movement(void) {
+    static bool send_green_next = true;
+    if (!network_ready()) {
+        printf("Movement ignored: network is disconnected.\n");
+        return;
+    }
+    const char *colour = send_green_next ? "GREEN" : "RED";
+    if (network_publish(MQTT_PEER_COMMAND_TOPIC, colour, strlen(colour), 0, false)) {
+        printf("Movement: queued %s to %s\n", colour, MQTT_PEER_COMMAND_TOPIC);
+        send_green_next = !send_green_next;
+    } else {
+        printf("Movement: publish failed; try again.\n");
+    }
+}
+
+// Application-specific interpretation stays out of the MQTT transport.
+static void apply_received_command(void) {
+    mqtt_message_t message;
+    // Bound each batch so incoming traffic cannot starve sensor sampling.
+    for (size_t i = 0; i < MQTT_RX_QUEUE_CAPACITY && network_receive(&message, 0); ++i) {
+        if (strcmp(message.topic, MQTT_COMMAND_TOPIC) != 0) continue;
+        if (message.length == 3 && memcmp(message.payload, "RED", 3) == 0) {
+            ledmatrix_fill(5, 0, 0);
+            printf("LED command applied: RED\n");
+        } else if (message.length == 5 && memcmp(message.payload, "GREEN", 5) == 0) {
+            ledmatrix_fill(0, 5, 0);
+            printf("LED command applied: GREEN\n");
+        } else if (message.length == 3 && memcmp(message.payload, "OFF", 3) == 0) {
+            ledmatrix_fill(0, 0, 0);
+            printf("LED command applied: OFF\n");
+        } else {
+            printf("Demo: unrecognised payload on %s (%u bytes).\n",
+                   message.topic, (unsigned)message.length);
+        }
+    }
+    static uint32_t previous_drops;
+    uint32_t drops = network_drop_count();
+    if (drops != previous_drops) {
+        printf("Network: %lu queued messages discarded in total.\n", (unsigned long)drops);
+        previous_drops = drops;
+    }
+}
+
+// Demo hardware/parser lives here; networking only transports its bytes.
+static void application_task(void *arg) {
+    (void)arg;
+    bool sensor_available = setup_sensor();
+    ledmatrix_init();
+    bool display_started = false;
+    for (;;) {
+        if (sensor_available && read_movement() && ENABLE_MOTION_TEST && NODE_ID == 1)
+            send_movement();
+        if (network_ready()) {
+            if (!display_started) {
+                ledmatrix_fill(5, 0, 5);
+                display_started = true;
+            }
+            apply_received_command();
+        } else {
+            if (display_started) ledmatrix_fill(0, 0, 0);
+            display_started = false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+void vApplicationStackOverflowHook(TaskHandle_t task, char *name) {
+    (void)task;
+    panic("FreeRTOS stack overflow: %s", name);
+}
+void vApplicationMallocFailedHook(void) { panic("FreeRTOS heap exhausted"); }
+int main(void) {
+    stdio_init_all();
+    // Boot without a serial monitor so unattended panels can reconnect.
+    char board_id[2 * PICO_UNIQUE_BOARD_ID_SIZE_BYTES + 1];
+    static char client_id[32];
+    static network_task_config_t network;
+    pico_get_unique_board_id_string(board_id, sizeof(board_id));
+    snprintf(client_id, sizeof(client_id), "SE4_%s", board_id);
+    network = (network_task_config_t){
+        .ssid = WIFI_SSID, .password = WIFI_PASSWORD, .client_id = client_id,
+        .subscription = MQTT_COMMAND_TOPIC, .status_topic = MQTT_PRESENCE_TOPIC
+    };
+    if (!network_task_start(&network) ||
+        xTaskCreate(application_task, "Application", 1024, NULL, 2, NULL) != pdPASS)
+        panic("Could not create application tasks");
+    // Start scheduling. Successful startup never returns to main().
+    vTaskStartScheduler();
+    panic("FreeRTOS scheduler returned");
 }
