@@ -239,17 +239,5 @@ its connection after startup does not stop the firmware. Avoid sharing screensho
 
 ## Validation
 
-Host tests use stubbed SDK calls to exercise the actual MQTT module. They cover
-subscription registration/copying/limits, late registration, retry and readiness,
-fragmented binary/empty/maximum-sized messages, FIFO overflow, invalid inputs,
-disconnect cleanup and resubscription. They do not replace a hardware/broker test.
-
-```powershell
-& C:/msys64/mingw64/bin/gcc.exe -std=c11 -Wall -Wextra -Werror -Itests/mqtt_stubs -Isrc/network -Iconfig tests/mqtt_handler_test.c src/network/mqtt_handler.c -o build/mqtt_handler_test.exe
-& ./build/mqtt_handler_test.exe
-& C:/msys64/mingw64/bin/gcc.exe -std=c11 -Wall -Wextra -Werror -Iconfig -Isrc/sensors tests/motion_detector_test.c -o build/motion_detector_test.exe
-& ./build/motion_detector_test.exe
-```
-
-Both node firmware builds and host tests are checked. The two-board sensor demo
-worked before this framework change; repeat the steps above on the new firmware.
+Build both node firmware variants, then repeat the two-board sensor demo steps
+above on hardware with a running MQTT broker.
