@@ -21,6 +21,7 @@ static struct mqtt_connect_client_info_t client_info;
 static char will_topic[MQTT_TOPIC_MAX_LENGTH + 1];
 static char will_payload[MQTT_PAYLOAD_MAX_LENGTH + 1];
 static uint16_t keep_alive_seconds = 30;
+static uint32_t connection_generation;
 static bool connection_pending;
 static bool attempted;
 static u32_t last_attempt_ms;
@@ -149,6 +150,7 @@ static void mqtt_connection_cb(mqtt_client_t *mqtt, void *arg, mqtt_connection_s
     incoming_valid = false;
     rx_head = rx_count = 0;
     if (status == MQTT_CONNECT_ACCEPTED) {
+        ++connection_generation;
         printf("MQTT connected to %s.\n", MQTT_BROKER_HOST);
         mqtt_set_inpub_callback(mqtt, incoming_publish_cb, incoming_data_cb, NULL);
         service_subscriptions();
@@ -321,4 +323,11 @@ bool mqtt_is_ready(void) {
     for (size_t i = 0; i < subscription_count; ++i) ready = ready && subscriptions[i].active;
     cyw43_arch_lwip_end();
     return ready;
+}
+
+uint32_t mqtt_connection_generation(void) {
+    cyw43_arch_lwip_begin();
+    uint32_t generation = connection_generation;
+    cyw43_arch_lwip_end();
+    return generation;
 }

@@ -1,5 +1,11 @@
 # MQTT coordinator guide and protocol v1
 
+**Recovery implementation update:** [RECOVERY.md](RECOVERY.md) defines the binary
+recovery envelope now implemented. Its token/state/applied/resume exchange
+supersedes the proposed JSON recovery examples below. Game encoding and the
+controller all-panel barrier remain application integration work.
+
+
 Status: proposed application contract; transport capabilities implemented below.
 This document does not claim the full game or FreeRTOS integration is finished.
 

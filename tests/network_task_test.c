@@ -31,15 +31,26 @@ static void (*task_entry)(void *);
 static void *task_arg;
 static jmp_buf iteration;
 static bool ready, incoming, send_ok = true;
-static int sends;
+static int sends, stage, ack_sends;
+static bool test_recovery;
+static uint32_t clock_ms = 1000, generation = 1, lower_drops;
+static uint8_t token[8], previous_token[8];
+static mqtt_message_t injected;
+static void check_iteration(void);
+
+uint32_t mqtt_received_drop_count(void) { return lower_drops; }
+uint32_t mqtt_connection_generation(void) { return generation; }
+uint64_t get_absolute_time(void) { return clock_ms; }
+uint32_t to_ms_since_boot(uint64_t time) { return (uint32_t)time; }
+
 static char received_payload[16];
 int xTaskCreate(void (*entry)(void *), const char *name, unsigned stack,
                 void *arg, unsigned priority, TaskHandle_t *handle) {
     (void)name; (void)stack; (void)priority; (void)handle;
     task_entry = entry; task_arg = arg; return pdPASS;
 }
-void vTaskDelay(TickType_t ticks) { assert(ticks > 0); longjmp(iteration, 1); }
-TickType_t xTaskGetTickCount(void) { return 1000; }
+void vTaskDelay(TickType_t ticks) { assert(ticks > 0); clock_ms += ticks; check_iteration(); }
+TickType_t xTaskGetTickCount(void) { return clock_ms; }
 bool wifi_init_and_connect(const char *s, const char *p) { return s && p; }
 bool is_wifi_connected(void) { return true; }
 bool mqtt_configure_will(const char *t, const char *p, uint16_t k) { return t && p && k; }
@@ -54,48 +65,129 @@ bool mqtt_send_ex(const char *topic, const void *payload, size_t length,
         assert(length < sizeof(received_payload));
         memcpy(received_payload, payload, length); received_payload[length] = 0;
     }
+    if (!strcmp(topic, "sync")) { assert(length == 8); memcpy(token, payload, 8); }
+    if (!strcmp(topic, "applied")) { assert(length == 12); ++ack_sends; }
     return send_ok;
 }
 bool mqtt_receive(mqtt_message_t *m) {
     if (!incoming) return false;
-    *m = (mqtt_message_t){.topic = "state", .payload = {'R', 0, 'D'}, .length = 3};
+    *m = test_recovery ? injected : (mqtt_message_t){.topic = "state", .payload = {'R', 0, 'D'}, .length = 3};
     incoming = false; return true;
 }
-static void step(void) {
-    // Stops at the task's first blocking delay. This tests queue routing, not
-    // FreeRTOS scheduling. SDK/FreeRTOS are exercised by the firmware build.
-    if (!setjmp(iteration)) task_entry(task_arg);
+
+static void inject_recovery(const char *topic, bool old) {
+    injected = (mqtt_message_t){0};
+    strcpy(injected.topic, topic);
+    memcpy(injected.payload, old ? previous_token : token, 8);
+    injected.payload[11] = 7;
+    injected.payload[12] = 2;
+    injected.length = !strcmp(topic, "snapshot") ? 13 : 12;
+    incoming = true;
 }
-int main(void) {
-    network_task_config_t config = {"ssid", "password", "id", "command", "status"};
+static void check_iteration(void) {
+    mqtt_message_t m;
+    int n = stage++;
+    if (test_recovery) {
+        switch (n) {
+        case 0:
+            assert(network_ready() && !network_game_ready());
+            assert(!network_publish("tap", "x", 1, 1, false));
+            inject_recovery("snapshot", false); break;
+        case 1:
+            assert(network_receive(&m, 0) && m.length == 13);
+            assert(!network_game_ready());
+            assert(network_state_applied(&m)); break;
+        case 2:
+            assert(ack_sends == 1 && !network_game_ready());
+            inject_recovery("resume", false); break;
+        case 3:
+            assert(network_game_ready());
+            assert(network_publish("tap", "x", 1, 1, false));
+            memcpy(previous_token, token, 8);
+            ++generation; // Reconnect missed between owner iterations.
+            inject_recovery("resume", true); break;
+        case 4:
+            assert(!network_game_ready() && sends == 0);
+            assert(memcmp(token, previous_token, 8));
+            inject_recovery("snapshot", false); break;
+        case 5:
+            assert(network_receive(&m, 0));
+            assert(network_state_applied(&m)); send_ok = false; break;
+        case 6:
+            assert(!network_game_ready() && ack_sends == 2);
+            send_ok = true; clock_ms += 200; break;
+        case 7:
+            assert(ack_sends == 3);
+            inject_recovery("resume", false); break;
+        case 8:
+            assert(network_game_ready()); clock_ms += 3000; break;
+        case 9:
+            assert(!network_game_ready()); inject_recovery("snapshot", false); break;
+        case 10:
+            assert(network_receive(&m, 0)); assert(network_state_applied(&m)); break;
+        case 11:
+            inject_recovery("resume", false); break;
+        case 12:
+            assert(network_game_ready()); ++lower_drops; break;
+        case 13:
+            assert(!network_game_ready()); longjmp(iteration, 1);
+        default: assert(false);
+        }
+        return;
+    }
+    switch (n) {
+    case 0: {
+        assert(network_game_ready());
+        char bytes[] = "TAP";
+        assert(network_publish("tap", bytes, 3, 1, false)); bytes[0] = 'X'; break;
+    }
+    case 1:
+        assert(sends == 1 && !strcmp(received_payload, "TAP"));
+        assert(!network_publish("bad/+", "x", 1, 1, false));
+        assert(!network_publish("tap", NULL, 1, 1, false));
+        assert(!network_publish("tap", "x", 1, 2, false));
+        for (int i = 0; i < 8; ++i) assert(network_publish("tap", "x", 1, 1, false));
+        assert(!network_publish("tap", "x", 1, 1, false)); ready = false; break;
+    case 2:
+        assert(network_drop_count() == 8 && !network_ready());
+        ready = true; incoming = true; break;
+    case 3:
+        assert(network_receive(&m, 0) && m.length == 3 && m.payload[1] == 0);
+        assert(!network_receive(&m, 20) && observed_wait == 20);
+        assert(!network_receive(NULL, 0));
+        assert(network_publish("tap", "x", 1, 1, false)); send_ok = false; break;
+    case 4:
+        assert(network_drop_count() == 9); incoming = true; break;
+    case 13:
+        assert(network_drop_count() == 10); ready = false; break;
+    case 14:
+        assert(network_drop_count() == 18 && !network_receive(&m, 0));
+        longjmp(iteration, 1);
+    default: assert(n >= 5 && n <= 12); incoming = true;
+    }
+}
+int main(int argc, char **argv) {
+    (void)argv;
+    test_recovery = argc > 1;
+    const char *filters[] = {"command", "nodes/+/status"};
+    network_task_config_t config = {.ssid="ssid", .password="password", .client_id="id",
+                                    .status_topic="status", .subscriptions=filters, .subscription_count=2};
+    if (test_recovery) {
+        config.sync_topic="sync"; config.state_topic="snapshot";
+        config.applied_topic="applied"; config.resume_topic="resume"; config.boot_nonce=42;
+    }
     assert(!network_publish("tap", "x", 1, 1, false));
     assert(!network_task_start(NULL));
+    network_task_config_t invalid = config;
+    invalid.subscription_count = MQTT_MAX_SUBSCRIPTIONS + 1;
+    assert(!network_task_start(&invalid));
+    invalid = config; invalid.status_topic = "bad/+";
+    assert(!network_task_start(&invalid));
     assert(network_task_start(&config));
     assert(!network_task_start(&config));
-    ready = true; step(); assert(network_ready());
-    char bytes[] = "TAP";
-    assert(network_publish("tap", bytes, 3, 1, false));
-    bytes[0] = 'X';
-    step(); assert(sends == 1 && !strcmp(received_payload, "TAP"));
-    assert(!network_publish("bad/+", "x", 1, 1, false));
-    assert(!network_publish("tap", NULL, 1, 1, false));
-    assert(!network_publish("tap", "x", 1, 2, false));
-    for (int i = 0; i < 8; ++i) assert(network_publish("tap", "x", 1, 1, false));
-    assert(!network_publish("tap", "x", 1, 1, false));
-    ready = false; step(); assert(!network_ready());
-    assert(network_drop_count() == 8);
-    ready = true; incoming = true; step();
-    mqtt_message_t m;
-    assert(network_receive(&m, 0) && m.length == 3 && m.payload[1] == 0);
-    assert(!network_receive(&m, 0));
-    assert(!network_receive(&m, pdMS_TO_TICKS(20)) && observed_wait == 20);
-    assert(!network_receive(NULL, 0));
-    assert(network_publish("tap", "x", 1, 1, false));
-    send_ok = false; step(); assert(network_drop_count() == 9);
-    for (int i = 0; i < 9; ++i) { incoming = true; step(); }
-    assert(network_drop_count() == 10); // Ninth incoming message exceeds app FIFO.
-    ready = false; step();
-    assert(network_drop_count() == 18); // Eight old incoming messages discarded.
-    assert(!network_receive(&m, 0));
-    puts("Network task queue tests passed.");
+    ready = true;
+    // Run ONE continuous worker loop. Delay callbacks drive simulated application
+    // actions; longjmp exits only after the entire scenario, not after each loop.
+    if (!setjmp(iteration)) task_entry(task_arg);
+    puts(test_recovery ? "Network task recovery integration tests passed." : "Network task queue tests passed.");
 }

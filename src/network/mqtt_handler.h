@@ -38,6 +38,8 @@ void init_mqtt_client(const char *client_id);
 bool mqtt_subscribe_topic(const char *topic);
 // Supports QoS 0/1. Re-registering with a different QoS is rejected.
 bool mqtt_subscribe_topic_qos(const char *topic, uint8_t qos);
+// Changes after every accepted connection, even if the task missed the outage.
+uint32_t mqtt_connection_generation(void);
 bool mqtt_is_ready(void);  // Connected AND all registered subscriptions accepted.
 bool is_mqtt_connected(void);
 

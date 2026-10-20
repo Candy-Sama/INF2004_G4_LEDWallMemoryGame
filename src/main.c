@@ -7,6 +7,8 @@
 #include "wifi_creds.h" // Standard build: application supplies configured credentials.
 #include "network_task.h"
 #include "task.h"
+#include "pico/rand.h"
+#include "network_recovery.h"
 #include "imudriver.h"
 #include "motion_detector.h"
 #include "ledmatrix.h"
@@ -60,7 +62,7 @@ static bool read_movement(void) {
 
 static void send_movement(void) {
     static bool send_green_next = true;
-    if (!network_ready()) {
+    if (!network_game_ready()) {
         printf("Movement ignored: network is disconnected.\n");
         return;
     }
@@ -78,6 +80,18 @@ static void apply_received_command(void) {
     mqtt_message_t message;
     // Bound each batch so incoming traffic cannot starve sensor sampling.
     for (size_t i = 0; i < MQTT_RX_QUEUE_CAPACITY && network_receive(&message, 0); ++i) {
+        if (!strcmp(message.topic, MQTT_STATE_TOPIC)) {
+            // Example snapshot only: one byte holds a 2-bit colour code.
+            // Real game/layout owners replace this with full state installation.
+            if (message.length != RECOVERY_HEADER_SIZE + 1) continue;
+            uint8_t colour = message.payload[RECOVERY_HEADER_SIZE];
+            if (colour > 3) continue;
+            ledmatrix_fill(colour == 1 || colour == 3 ? 5 : 0,
+                           colour == 2 ? 5 : 0, colour == 3 ? 5 : 0);
+            if (!network_state_applied(&message))
+                printf("State applied but acknowledgement queue full; recovery will retry.\n");
+            continue;
+        }
         if (strcmp(message.topic, MQTT_COMMAND_TOPIC) != 0) continue;
         if (message.length == 3 && memcmp(message.payload, "RED", 3) == 0) {
             ledmatrix_fill(5, 0, 0);
@@ -138,7 +152,10 @@ int main(void) {
     snprintf(client_id, sizeof(client_id), "SE4_%s", board_id);
     network = (network_task_config_t){
         .ssid = WIFI_SSID, .password = WIFI_PASSWORD, .client_id = client_id,
-        .subscription = MQTT_COMMAND_TOPIC, .status_topic = MQTT_PRESENCE_TOPIC
+        .subscription = MQTT_COMMAND_TOPIC, .status_topic = MQTT_PRESENCE_TOPIC,
+        .sync_topic = MQTT_SYNC_TOPIC, .state_topic = MQTT_STATE_TOPIC,
+        .applied_topic = MQTT_APPLIED_TOPIC, .resume_topic = MQTT_RESUME_TOPIC,
+        .boot_nonce = get_rand_64() | 1u
     };
     if (!network_task_start(&network) ||
         xTaskCreate(application_task, "Application", 1024, NULL, 2, NULL) != pdPASS)

@@ -2,6 +2,11 @@
 
 ## FreeRTOS starter (current firmware)
 
+See [connection recovery](docs/RECOVERY.md) for the new snapshot/applied/resume
+handshake and PC-only demonstration. The default panel demo now waits for a
+controller response before permitting input.
+
+
 See [FreeRTOS networking and teammate API](docs/FREERTOS.md). The firmware now
 starts a Network Task and an Application Task. Other tasks use `network_publish`
 and `network_receive`; low-level MQTT APIs belong only to the Network Task.

@@ -47,6 +47,7 @@ add_executable(LED_MEMORY_GAME
     src/display/ledmatrix.c
     src/network/mqtt_handler.c
     src/network/network_task.c
+    src/network/network_recovery.c
     src/network/wifi_manager.c
     src/sensors/imudriver.c
 )
@@ -77,6 +78,7 @@ target_link_libraries(LED_MEMORY_GAME
     hardware_i2c
     hardware_pio
     pico_unique_id
+    pico_rand
     pico_cyw43_arch_lwip_sys_freertos
     pico_lwip_mqtt
     FreeRTOS-Kernel-Heap4
