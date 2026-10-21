@@ -20,7 +20,7 @@
     },
 
     "cmake.configureSettings": {
-    "RTOS_SMOKETEST": "ON"
+    "RTOS_SMOKETEST": "OFF"
     },
     
     "cmake.configureOnEdit": true,
