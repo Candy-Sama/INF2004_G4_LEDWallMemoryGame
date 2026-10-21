@@ -13,6 +13,7 @@
 #include "imudriver.h"
 #include "motion_detector.h"
 #include "ledmatrix.h"
+#include "imagedata.h"
 
 #ifndef WAIT_FOR_USB
 #define WAIT_FOR_USB 0
@@ -33,14 +34,25 @@
 #define NET_TASK_STACK      2048
 #define DISPLAY_TASK_STACK  512
  
-typedef struct { uint8_t r, g, b; } display_cmd_t;
+// typedef struct { uint8_t r, g, b; } display_cmd_t;
+typedef struct {
+    const uint8_t *image; //NULL means fill with R,G,B
+    uint8_t r,g,b;
+} display_cmd_t;
+
 typedef enum { APP_EVT_MOTION } app_event_t;
  
 static QueueHandle_t net_event_q;   // sensor_task -> net_task
 static QueueHandle_t display_q;     // net_task    -> display_task
  
 static void show_colour(uint8_t r, uint8_t g, uint8_t b) {
-    display_cmd_t cmd = { r, g, b };
+    display_cmd_t cmd = {NULL, r, g, b };
+    // Never block the caller; if the panel is busy the newest colour is dropped.
+    xQueueSend(display_q, &cmd, 0);
+}
+
+static void show_image(const uint8_t *rgb){
+    display_cmd_t cmd = {rgb, 0, 0, 0};
     // Never block the caller; if the panel is busy the newest colour is dropped.
     xQueueSend(display_q, &cmd, 0);
 }
@@ -139,15 +151,17 @@ static void sensor_task(void *arg) {
 } */
 
 static void send_movement(void) {
-    static bool send_green_next = true;
+    // static bool send_green_next = true;
+    static bool send_heart_next = true;
     if (!is_wifi_connected() || !is_mqtt_connected()) {
         printf("Movement ignored: network is disconnected.\n");
         return;
     }
-    const char *colour = send_green_next ? "GREEN" : "RED";
-    if (mqtt_send(MQTT_PEER_COMMAND_TOPIC, colour, strlen(colour))) {
-        printf("Movement: queued %s to %s\n", colour, MQTT_PEER_COMMAND_TOPIC);
-        send_green_next = !send_green_next;
+    const char *card = send_heart_next ? "Heart" : "Dark Heart";
+    if (mqtt_send(MQTT_PEER_COMMAND_TOPIC, card, strlen(card))) {
+        printf("Movement: queued %s to %s\n", card, MQTT_PEER_COMMAND_TOPIC);
+        show_image(send_heart_next ? heartCard_bin : heartCardDark_bin);
+        send_heart_next = !send_heart_next;
     } else {
         printf("Movement: publish failed; try again.\n");
     }
@@ -167,12 +181,12 @@ static void apply_received_command(void) {
     // Bound each batch so incoming traffic cannot starve sensor sampling.
     for (size_t i = 0; i < MQTT_RX_QUEUE_CAPACITY && mqtt_receive(&message); ++i) {
         if (strcmp(message.topic, MQTT_COMMAND_TOPIC) != 0) continue;
-        if (message.length == 3 && memcmp(message.payload, "RED", 3) == 0) {
-            ledmatrix_fill(5, 0, 0);
-            printf("LED command applied: RED\n");
-        } else if (message.length == 5 && memcmp(message.payload, "GREEN", 5) == 0) {
-            ledmatrix_fill(0, 5, 0);
-            printf("LED command applied: GREEN\n");
+        if (message.length == 5 && memcmp(message.payload, "Heart", 5) == 0) {
+            show_image(heartCard_bin);
+            printf("LED command applied: Heart\n");
+        } else if (message.length == 10 && memcmp(message.payload, "Dark Heart", 10) == 0) {
+            show_image(heartCardDark_bin);
+            printf("LED command applied: Dark Heart\n");
         } else if (message.length == 3 && memcmp(message.payload, "OFF", 3) == 0) {
             ledmatrix_fill(0, 0, 0);
             printf("LED command applied: OFF\n");
@@ -244,7 +258,7 @@ static void net_task(void *arg) {
             init_mqtt_client(client_id);
             if (mqtt_is_ready()) {
                 if (!display_started) {
-                    show_colour(5, 0, 5);   // dim pink startup colour
+                    show_image(Number1CardDark_bin);   // default number card - hardcodded to 1 for testing
                     display_started = true;
                 }
                 apply_received_command();
@@ -260,10 +274,14 @@ static void net_task(void *arg) {
 static void display_task(void *arg) {
     (void)arg;
     ledmatrix_init();
-    display_cmd_t cmd;
+     display_cmd_t cmd;
     for (;;) {
         if (xQueueReceive(display_q, &cmd, portMAX_DELAY) == pdTRUE) {
+            if (cmd.image){
+                show_image_rgb(cmd.image);
+            }else{
             ledmatrix_fill(cmd.r, cmd.g, cmd.b);
+        }
         }
     }
 }

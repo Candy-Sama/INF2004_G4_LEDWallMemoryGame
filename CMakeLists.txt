@@ -55,6 +55,7 @@ endif()
 add_executable(LED_MEMORY_GAME 
     ${APP_MAIN}
     src/display/ledmatrix.c
+    src/display/imagedata_bin.S
     src/network/mqtt_handler.c
     src/network/wifi_manager.c
     src/sensors/imudriver.c

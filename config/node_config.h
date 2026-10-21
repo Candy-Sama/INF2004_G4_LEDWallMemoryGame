@@ -2,7 +2,7 @@
 #define NODE_CONFIG_H
 
 // Change this to the number of the board you are about to flash.
-#define NODE_ID 2
+#define NODE_ID 1
 
 // Destination for node 1's movement commands.
 #define PEER_NODE_ID 2
