@@ -26,8 +26,8 @@ typedef struct {
     size_t length;
 } mqtt_message_t;
 
-// Low-level APIs: only the Network Task calls these after Wi-Fi architecture
-// initialisation. Other tasks use network_task.h and its copied queues.
+// Call these APIs from one owner (currently the main loop) after Wi-Fi
+// architecture initialisation; future RTOS callers must use one Network Task.
 // They handle network locking internally. The supplied client_id must stay valid.
 // Call repeatedly while Wi-Fi is up to service connection/subscription retries.
 void init_mqtt_client(const char *client_id);

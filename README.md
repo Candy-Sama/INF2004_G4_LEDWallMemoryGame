@@ -1,36 +1,4 @@
-# LED Memory Game
-
-## Convert multiple pictures at once
-
-Put your PNG files in `tools/image_converter/images`. Name each file with letters, digits, and underscores only, such as `arrow_up.png`.
-
-Run these commands from the project root:
-
-```bash
-cd tools/image_converter
-mkdir -p ../../src/display/images_bin
-gcc convert.c -o convert -lm
-./convert images/*.png
-```
-
-The converter creates these files:
-
-- `src/display/images_bin/NAME.bin`: the 8x8 RGB data for each picture.
-- `src/display/imagedata_bin.S`: embeds each `.bin` file in the firmware.
-- `src/display/imagedata.h`: declares `NAME_bin` for each picture.
-
-Do not edit the generated files by hand. Run the converter again after you add or change a picture.
 # MQTT framework and two-board demo
-
-## FreeRTOS starter (current firmware)
-
-See [FreeRTOS networking and teammate API](docs/FREERTOS.md). The firmware now
-starts a Network Task and an Application Task. Other tasks use `network_publish`
-and `network_receive`; low-level MQTT APIs belong only to the Network Task.
-Download the pinned FreeRTOS dependency as described in that guide before building.
-USB serial is no longer required to start the firmware. Earlier main-loop API
-examples below describe the low-level transport, not direct calls from other tasks.
-
 
 ## MQTT feedback update
 
@@ -69,7 +37,7 @@ numbers are not built into the MQTT framework.
 The standard firmware uses `WIFI_SSID` and `WIFI_PASSWORD` from
 `config/wifi_creds.h`. `main.c` supplies them to
 `wifi_init_and_connect(WIFI_SSID, WIFI_PASSWORD)`. Open the USB serial monitor
-to observe the board; no credential-entry prompt appears. Changing the configured
+to start the board; no credential-entry prompt appears. Changing the configured
 network requires rebuilding and reflashing. The connection attempt can take up
 to 30 seconds. On startup failure, check the settings/network and restart.
 
@@ -100,7 +68,7 @@ is active and flash persistence are not implemented.
 ## Interface for teammates
 
 Include `mqtt_handler.h`. Initialise the Wi-Fi architecture before using the
-MQTT APIs. Only the Network Task calls the low-level APIs; locks are handled inside the module.
+MQTT APIs. Call them from the main loop; locks are handled inside the module.
 
 ```c
 // After wifi_init_and_connect(ssid, password) succeeds:
@@ -190,7 +158,7 @@ the demo does not monitor all required boards or pause gameplay.
 The MQTT module has no dependency on `node_config.h`, sensor code or LED code.
 Its callbacks only collect data and update networking state. Application code
 pops messages in the main loop and performs hardware/game actions there.
-The Pico SDK services networking using its FreeRTOS-aware backend.
+The Pico SDK services networking in the background; this demo is not FreeRTOS.
 Game-engine and audio files remain unfinished team placeholders.
 
 ```mermaid
@@ -220,7 +188,7 @@ For future builds, set NODE_ID to the intended board, compile, then flash
 do not refresh the separately labelled snapshot files. The current source is
 set to Node 1. Do not flash Node 1's firmware onto both boards.
 
-Both boards now boot without waiting for a USB serial monitor. COM numbers may
+Both boards wait for a USB serial monitor at startup. COM numbers may
 change after flashing, and only one serial monitor can open each port. Closing
 its connection after startup does not stop the firmware. Avoid sharing screenshots of your terminal password-entry box.
 
@@ -239,5 +207,17 @@ its connection after startup does not stop the firmware. Avoid sharing screensho
 
 ## Validation
 
-Build both node firmware variants, then repeat the two-board sensor demo steps
-above on hardware with a running MQTT broker.
+Host tests use stubbed SDK calls to exercise the actual MQTT module. They cover
+subscription registration/copying/limits, late registration, retry and readiness,
+fragmented binary/empty/maximum-sized messages, FIFO overflow, invalid inputs,
+disconnect cleanup and resubscription. They do not replace a hardware/broker test.
+
+```powershell
+& C:/msys64/mingw64/bin/gcc.exe -std=c11 -Wall -Wextra -Werror -Itests/mqtt_stubs -Isrc/network -Iconfig tests/mqtt_handler_test.c src/network/mqtt_handler.c -o build/mqtt_handler_test.exe
+& ./build/mqtt_handler_test.exe
+& C:/msys64/mingw64/bin/gcc.exe -std=c11 -Wall -Wextra -Werror -Iconfig -Isrc/sensors tests/motion_detector_test.c -o build/motion_detector_test.exe
+& ./build/motion_detector_test.exe
+```
+
+Both node firmware builds and host tests are checked. The two-board sensor demo
+worked before this framework change; repeat the steps above on the new firmware.

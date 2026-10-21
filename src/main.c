@@ -1,139 +1,181 @@
 #include <stdio.h>
 #include <string.h>
-
-#include "FreeRTOS.h"
-#include "task.h"
-#include "queue.h"
-#include "semphr.h"         // Added for your Mutex
-#include "hardware/pio.h"
 #include "pico/stdlib.h"
-#include "ws2812.pio.h"
-#include "FreeRTOSConfig.h"
-#include "wifi_creds.h"
+#include "pico/unique_id.h"
+#include "hardware/i2c.h"
 #include "node_config.h"
-#include "ledmatrix.h"
+#include "wifi_manager.h"
+#include "wifi_creds.h" // Standard build: application supplies configured credentials.
+#include "mqtt_handler.h"
 #include "imudriver.h"
-#include "network_task.h"
-#include "game_logic.h"     // Added for Master Logic
+#include "motion_detector.h"
+#include "ledmatrix.h"
 
-#define TAP_QUEUE_LENGTH 10
-#define APPLICATION_PRIORITY 2
-#define APPLICATION_STACK_WORDS 1024
-#define APPLICATION_INTERVAL_MS 10
+#define I2C_PORT i2c0
+#define I2C_SDA 0
+#define I2C_SCL 1
 
-QueueHandle_t tapEventQueue;
+static bool setup_sensor(void) {
+    i2c_init(I2C_PORT, 400 * 1000);
+    gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
+    gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
+    gpio_pull_up(I2C_SDA);
+    gpio_pull_up(I2C_SCL);
+    printf("IMU: SDA=GP%d, SCL=GP%d\n", I2C_SDA, I2C_SCL);
+    return imu_init(I2C_PORT);
+}
 
-// --- MASTER NODE GLOBALS ---
-SemaphoreHandle_t game_state_mutex;
-GameManager master_game;
+// Runs in the main loop, not in a network callback.
+static bool read_movement(void) {
+    static absolute_time_t next_read;
+    static motion_detector_t detector;
+#if IMU_LOG_READINGS
+    static absolute_time_t next_print;
+#endif
+    if (!time_reached(next_read)) {
+        return false;
+    }
+    next_read = make_timeout_time_ms(10);
 
-// Network config: Master node listens to ALL tap commands
-static const network_task_config_t network_config = {
-    .ssid = WIFI_SSID,
-    .password = WIFI_PASSWORD,
-    .client_id = "SE4_MASTER_NODE", 
-    .subscription = "se4/memorygame/+/command", // Listen to all slave nodes
-    .status_topic = MQTT_PRESENCE_TOPIC,
-};
+    imu_acceleration_t sample;
+    imu_read_result_t result = imu_read_acceleration(&sample);
+    if (result == IMU_READ_ERROR) {
+        detector.initialised = false;
+        next_read = make_timeout_time_ms(500);
+        return false;
+    }
+    if (result != IMU_NEW_DATA) {
+        return false;
+    }
+#if IMU_LOG_READINGS
+    if (time_reached(next_print)) {
+        printf("Node %d IMU: X=%d mg Y=%d mg Z=%d mg\n",
+               NODE_ID, sample.x_mg, sample.y_mg, sample.z_mg);
+        next_print = make_timeout_time_ms(500);
+    }
+#endif
+    return motion_detector_update(&detector, sample.x_mg, sample.y_mg,
+                                  sample.z_mg, to_ms_since_boot(get_absolute_time()));
+}
 
-static void application_task(void *arg) {
-    (void)arg;
-    led_init();
+static void send_movement(void) {
+    static bool send_green_next = true;
+    if (!is_wifi_connected() || !is_mqtt_connected()) {
+        printf("Movement ignored: network is disconnected.\n");
+        return;
+    }
+    const char *colour = send_green_next ? "GREEN" : "RED";
+    if (mqtt_send(MQTT_PEER_COMMAND_TOPIC, colour, strlen(colour))) {
+        printf("Movement: queued %s to %s\n", colour, MQTT_PEER_COMMAND_TOPIC);
+        send_green_next = !send_green_next;
+    } else {
+        printf("Movement: publish failed; try again.\n");
+    }
+}
 
-    // 1. Initialize Master Game Logic
-    game_init(&master_game);
-    printf("Master Game Manager initialized and board shuffled.\n");
-
-    for (;;) {
-        // default purple visual
-        for (int i = 0; i < NUM_LEDS; ++i) {
-            put_pixel(urgb_u32(5, 0, 5));
+// Application-specific interpretation stays out of the MQTT transport.
+static void apply_received_command(void) {
+    mqtt_message_t message;
+    // Bound each batch so incoming traffic cannot starve sensor sampling.
+    for (size_t i = 0; i < MQTT_RX_QUEUE_CAPACITY && mqtt_receive(&message); ++i) {
+        if (strcmp(message.topic, MQTT_COMMAND_TOPIC) != 0) continue;
+        if (message.length == 3 && memcmp(message.payload, "RED", 3) == 0) {
+            ledmatrix_fill(5, 0, 0);
+            printf("LED command applied: RED\n");
+        } else if (message.length == 5 && memcmp(message.payload, "GREEN", 5) == 0) {
+            ledmatrix_fill(0, 5, 0);
+            printf("LED command applied: GREEN\n");
+        } else if (message.length == 3 && memcmp(message.payload, "OFF", 3) == 0) {
+            ledmatrix_fill(0, 0, 0);
+            printf("LED command applied: OFF\n");
+        } else {
+            printf("Demo: unrecognised payload on %s (%u bytes).\n",
+                   message.topic, (unsigned)message.length);
         }
+    }
+    static uint32_t previous_drops;
+    uint32_t drops = mqtt_received_drop_count();
+    if (drops != previous_drops) {
+        printf("MQTT: %lu received messages discarded in total.\n", (unsigned long)drops);
+        previous_drops = drops;
+    }
+}
 
-        // --- 1. LOCAL IMU TAP (If someone physically hits the Master Node) ---
-        CompactTapData tap;
-        if (xQueueReceive(tapEventQueue, &tap, 0) == pdPASS && tap.tap_event && !tap.imu_fault) {
-            if (xSemaphoreTake(game_state_mutex, portMAX_DELAY) == pdTRUE) {
-                printf("Master physically tapped (Node %d)\n", NODE_ID);
-                game_process_input(&master_game, NODE_ID);
-                game_evaluate_match(&master_game);
-                
-                // Broadcast updated game state to all slaves
-                network_publish("se4/game/state", &master_game, sizeof(GameManager), 1, true);
-                xSemaphoreGive(game_state_mutex);
-            }
-        }
-
-        // --- 2. NETWORK TAPS (From Slave Nodes) ---
-        mqtt_message_t incoming;
-        while (network_receive(&incoming, 0)) {
-            // Check if the payload is a tap event
-            if (strstr(incoming.payload, "TAP DETECTED") != NULL) {
-                
-                // Extract which slave panel sent the tap from the topic string
-                int panel_id = -1;
-                sscanf(incoming.topic, "se4/memorygame/node%d", &panel_id);
-
-                if (panel_id >= 0 && panel_id <= 5) {
-                    if (xSemaphoreTake(game_state_mutex, portMAX_DELAY) == pdTRUE) {
-                        printf("Master received network tap from Panel: %d\n", panel_id);
-                        
-                        // Process the rules
-                        game_process_input(&master_game, (uint8_t)panel_id);
-                        game_evaluate_match(&master_game);
-
-                        // Broadcast the Minimum-Bit state payload back to the network
-                        network_publish("se4/game/state", &master_game, sizeof(GameManager), 1, true);
-                        xSemaphoreGive(game_state_mutex);
-                    }
-                }
-            } else {
-                printf("Received unhandled MQTT message on %s\n", incoming.topic);
-            }
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(APPLICATION_INTERVAL_MS));
+static void publish_status(void) {
+    static absolute_time_t next_publish;
+    if (time_reached(next_publish)) {
+        mqtt_send_ex(MQTT_PRESENCE_TOPIC, MQTT_STATUS_MESSAGE,
+                     strlen(MQTT_STATUS_MESSAGE), 1, true, NULL, NULL);
+        next_publish = make_timeout_time_ms(1000);
     }
 }
 
 int main(void) {
     stdio_init_all();
-    
-    // Give serial monitor a moment to connect
+    // Open the USB serial monitor to start this teaching/demo firmware.
     while (!stdio_usb_connected()) {
         sleep_ms(100);
     }
-    printf("\n--- Pico W Boot (MASTER NODE) ---\n");
+    sleep_ms(1000);
 
-    // Create Game Logic Mutex
-    game_state_mutex = xSemaphoreCreateMutex();
-    if (game_state_mutex == NULL) {
-        printf("Could not create Mutex.\n");
+    printf("\n--- NODE %d: SENSOR / MQTT / LED DEMO ---\n", NODE_ID);
+    bool sensor_available = setup_sensor();
+    ledmatrix_init();
+
+    // Client IDs identify physical boards; NODE_ID chooses their MQTT topics.
+    char board_id[2 * PICO_UNIQUE_BOARD_ID_SIZE_BYTES + 1];
+    static char client_id[32];
+    pico_get_unique_board_id_string(board_id, sizeof(board_id));
+    snprintf(client_id, sizeof(client_id), "SE4_%s", board_id);
+    printf("MQTT client: %s\nListen: %s\n", client_id, MQTT_COMMAND_TOPIC);
+
+    if (!wifi_init_and_connect(WIFI_SSID, WIFI_PASSWORD)) {
+        printf("Wi-Fi setup failed. Check credentials/network and restart.\n");
         return 1;
     }
-
-    tapEventQueue = xQueueCreate(TAP_QUEUE_LENGTH, sizeof(CompactTapData));
-    if (tapEventQueue == NULL) {
-        printf("Could not create tap event queue.\n");
+    // Broker publishes retained 'offline' if this connection disappears.
+    // 'online' only means transport available, not game-state synchronised.
+    if (!mqtt_configure_will(MQTT_PRESENCE_TOPIC, "offline", 10)) {
+        printf("Could not configure MQTT Last Will.\n");
         return 1;
     }
-
-    if (!network_task_start(&network_config)) {
-        printf("Could not start network task.\n");
+    // The application supplies the topic. The identity/layout module can supply
+    // a different string here without changing mqtt_handler.c.
+    if (!mqtt_subscribe_topic(MQTT_COMMAND_TOPIC)) {
+        printf("Could not register the command topic.\n");
         return 1;
     }
+    // Preserve the dim pink startup colour used by the working demo.
+    bool display_started = false;
+    bool wifi_was_connected = true;
 
-    imu_init(NODE_ID);
+    while (true) {
+        // 1. Read the sensor. Only node 1 publishes movement commands.
+        if (sensor_available && read_movement() && ENABLE_MOTION_TEST && NODE_ID == 1) {
+            send_movement();
+        }
 
-    if (xTaskCreate(application_task, "Application", APPLICATION_STACK_WORDS,
-                    NULL, APPLICATION_PRIORITY, NULL) != pdPASS) {
-        printf("Could not create application task.\n");
-        return 1;
+        // 2. Maintain MQTT when Wi-Fi is available.
+        bool wifi_connected = is_wifi_connected();
+        if (wifi_connected != wifi_was_connected) {
+            printf("Wi-Fi %s.\n", wifi_connected ? "available" : "lost; restore network or restart");
+            wifi_was_connected = wifi_connected;
+        }
+        if (wifi_connected) {
+            // Keep servicing even after connecting: subscriptions may need retries.
+            init_mqtt_client(client_id);
+            if (mqtt_is_ready()) {
+                if (!display_started) {
+                    ledmatrix_fill(5, 0, 5);
+                    display_started = true;
+                }
+                // 3. Apply incoming commands and send the status message.
+                apply_received_command();
+                publish_status();
+            }
+        }
+
+        // The configured Pico SDK architecture services networking in the background.
+        sleep_ms(10);
     }
-
-    printf("Starting FreeRTOS scheduler.\n");
-    vTaskStartScheduler();
-
-    printf("FreeRTOS scheduler returned unexpectedly.\n");
-    return 1;
 }
