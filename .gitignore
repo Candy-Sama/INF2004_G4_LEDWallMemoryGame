@@ -1,5 +1,6 @@
 build
 lib/FreeRTOS-Kernel/
+!lib/
 !.vscode/*
 .DS_Store
 tools/image_converter/convert

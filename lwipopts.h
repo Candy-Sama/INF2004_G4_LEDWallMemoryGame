@@ -6,9 +6,20 @@
 // (see https://www.nongnu.org/lwip/2_1_x/group__lwip__opts.html for details)
 
 // allow override in some examples
+// FreeRTOS build: lwIP runs in its own tcpip thread (pico_cyw43_arch_lwip_sys_freertos).
 #ifndef NO_SYS
-#define NO_SYS                      1
+#define NO_SYS                      0
 #endif
+#define SYS_LIGHTWEIGHT_PROT        1
+#define LWIP_TCPIP_CORE_LOCKING     1
+#define TCPIP_THREAD_NAME           "tcpip"
+#define TCPIP_THREAD_STACKSIZE      2048
+#define TCPIP_THREAD_PRIO           5
+#define TCPIP_MBOX_SIZE             16
+#define DEFAULT_RAW_RECVMBOX_SIZE   8
+#define DEFAULT_UDP_RECVMBOX_SIZE   8
+#define DEFAULT_TCP_RECVMBOX_SIZE   8
+#define DEFAULT_ACCEPTMBOX_SIZE     8
 // allow override in some examples
 #ifndef LWIP_SOCKET
 #define LWIP_SOCKET                 0

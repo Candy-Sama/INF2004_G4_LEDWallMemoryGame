@@ -28,6 +28,16 @@ set(PICO_BOARD pico_w CACHE STRING "Board type")
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
 
+# FreeRTOS kernel (git submodule in lib/FreeRTOS-Kernel). Must come after
+# pico_sdk_import.cmake and before project().
+set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/FreeRTOS-Kernel)
+include(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/FreeRTOS_Kernel_import.cmake)
+ 
+# Step-1 verification: configure with -DRTOS_SMOKETEST=ON to build the tiny
+# blink/queue test instead of the real application.
+option(RTOS_SMOKETEST "Build FreeRTOS smoke test instead of main.c" OFF)
+
+
 project(LED_MEMORY_GAME C CXX ASM)
 
 # Initialise the Raspberry Pi Pico SDK
@@ -35,8 +45,15 @@ pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
+if(RTOS_SMOKETEST)
+    set(APP_MAIN src/main_rtos_smoketest.c)
+else()
+    set(APP_MAIN src/main.c)
+endif()
+
+
 add_executable(LED_MEMORY_GAME 
-    src/main.c
+    ${APP_MAIN}
     src/display/ledmatrix.c
     src/network/mqtt_handler.c
     src/network/wifi_manager.c
@@ -69,8 +86,12 @@ target_link_libraries(LED_MEMORY_GAME
     hardware_i2c
     hardware_pio
     pico_unique_id
-    pico_cyw43_arch_lwip_threadsafe_background
+    pico_cyw43_arch_lwip_sys_freertos
     pico_lwip_mqtt
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+
+
 )
 
 pico_add_extra_outputs(LED_MEMORY_GAME)

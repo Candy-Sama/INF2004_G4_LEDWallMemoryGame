@@ -18,6 +18,11 @@
             "statusBarVisibility": "visible"
         }
     },
+
+    "cmake.configureSettings": {
+    "RTOS_SMOKETEST": "ON"
+    },
+    
     "cmake.configureOnEdit": true,
     "cmake.automaticReconfigure": true,
     "cmake.configureOnOpen": false,
