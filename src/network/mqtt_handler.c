@@ -38,6 +38,11 @@ static size_t incoming_used;
 static bool incoming_valid;
 static uint32_t dropped_messages;
 
+
+//Reconnection
+static uintptr_t dns_generation;
+static const char *pending_client_id;
+
 static bool valid_topic(const char *topic, bool filter) {
     if (topic == NULL) return false;
     size_t length = strlen(topic);
@@ -164,9 +169,18 @@ static void connect_to_broker(const ip_addr_t *address, const char *client_id) {
     }
 }
 
-static void dns_found_cb(const char *name, const ip_addr_t *address, void *arg) {
+static void dns_found_cb(
+    const char *name,
+    const ip_addr_t *address,
+    void *arg
+    ) 
+{
+    if ((uintptr_t)arg != dns_generation || !connection_pending) {
+        return; // Ignore an old or cancelled lookup.
+    }
+
     if (address != NULL) {
-        connect_to_broker(address, (const char *)arg);
+        connect_to_broker(address, pending_client_id);
     } else {
         connection_pending = false;
         printf("DNS resolution failed for %s\n", name);
@@ -189,7 +203,17 @@ static void service_connection(const char *client_id) {
     }
     connection_pending = true;
     ip_addr_t address;
-    err_t result = dns_gethostbyname(MQTT_BROKER_HOST, &address, dns_found_cb, (void *)client_id);
+    //reconnection
+    pending_client_id = client_id;
+    ++dns_generation;
+
+    err_t result = dns_gethostbyname(
+        MQTT_BROKER_HOST,
+        &address,
+        dns_found_cb,
+        (void *)dns_generation
+    );
+
     if (result == ERR_OK) {
         connect_to_broker(&address, client_id);
     } else if (result != ERR_INPROGRESS) {
@@ -306,4 +330,36 @@ bool mqtt_is_ready(void) {
     for (size_t i = 0; i < subscription_count; ++i) ready = ready && subscriptions[i].active;
     cyw43_arch_lwip_end();
     return ready;
+}
+
+// Reconnection Protocol
+void mqtt_reset_connection(void) {
+    cyw43_arch_lwip_begin(); //Locks the nextworking
+
+    ++dns_generation; // Invalidate any outstanding DNS result.
+    
+    if (client != NULL) { //if have a connection, remove
+        mqtt_disconnect(client);
+    }
+
+    //Clears the flags
+    connection_pending = false;
+    subscription_pending = false;
+    subscription_retry_wait = false;
+
+    //Mark all the saves subscriptions as inactive so can make it active later
+    for (size_t i = 0; i < subscription_count; ++i) {
+        subscriptions[i].active = false;
+    }
+
+    //Discard all the old messages
+    dropped_messages += (uint32_t)rx_count + (incoming_valid ? 1u : 0u);
+
+    incoming_valid = false;
+    rx_head = 0;
+    rx_count = 0;
+
+    last_attempt_ms = sys_now();
+
+    cyw43_arch_lwip_end();
 }

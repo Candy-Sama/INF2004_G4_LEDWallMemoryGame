@@ -58,4 +58,7 @@ bool mqtt_send_ex(const char *topic, const void *payload, size_t length,
 bool mqtt_receive(mqtt_message_t *message);
 uint32_t mqtt_received_drop_count(void);
 
+//For reconnecting
+void mqtt_reset_connection(void);
+
 #endif

@@ -213,6 +213,11 @@ static void publish_status(void) {
     }
 }
 
+static void report_wifi_status(bool connected) {
+    printf("Wi-Fi %s.\n", connected ? "connected" : "disconnected");
+    // Send a status instruction to display_q here.
+    // The Display Task will render it.
+}
 
 static void net_task(void *arg) {
     (void)arg;
@@ -242,29 +247,79 @@ static void net_task(void *arg) {
  
     bool display_started = false;
     bool wifi_was_connected = true;
- 
+    bool mqtt_was_ready = false;
+
+    TickType_t next_wifi_retry = xTaskGetTickCount(); //Reconnection Protocol part 1
+    
+
     for (;;) {
         bool wifi_connected = is_wifi_connected();
+
+
+        //Wifi Loss block
         if (wifi_connected != wifi_was_connected) {
-            printf("Wi-Fi %s.\n", wifi_connected ? "available" : "lost; restore network or restart");
+            report_wifi_status(wifi_connected);
+
+            if (!wifi_connected) {
+                mqtt_reset_connection();
+                mqtt_was_ready = false;
+                next_wifi_retry = xTaskGetTickCount();
+            }
+
             wifi_was_connected = wifi_connected;
         }
- 
-        // Always drain sensor events so stale movements are never replayed later.
-        handle_sensor_events();
- 
-        if (wifi_connected) {
-            // Keep servicing even after connecting: subscriptions may need retries.
-            init_mqtt_client(client_id);
-            if (mqtt_is_ready()) {
-                if (!display_started) {
-                    show_image(Number1CardDark_bin);   // default number card - hardcodded to 1 for testing
-                    display_started = true;
+
+        // Reconnection Protocol Part 2 (Retry block)
+        if (!wifi_connected){ 
+            TickType_t now = xTaskGetTickCount();
+            if ((int32_t)(now - next_wifi_retry) >= 0){
+                printf("Attempting Wi-Fi reconnection...\n");
+
+                bool reconnected =
+                    wifi_init_and_connect(WIFI_SSID, WIFI_PASSWORD);
+
+                next_wifi_retry =
+                    xTaskGetTickCount() + pdMS_TO_TICKS(5000);
+
+                // Discard movements accumulated during the connection attempt.
+                xQueueReset(net_event_q);
+
+                if (!reconnected) {
+                    printf("Wi-Fi retry failed. Waiting 5 seconds.\n");
                 }
-                apply_received_command();
-                publish_status();
             }
+
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
         }
+
+        // Wi-Fi is available here: the disconnected branch uses continue.
+        init_mqtt_client(client_id);
+
+        bool mqtt_ready = mqtt_is_ready();
+
+        if (mqtt_ready) {
+            if (!mqtt_was_ready) {
+                // Just became ready: discard inputs collected before readiness.
+                xQueueReset(net_event_q);
+                printf("MQTT connected and subscriptions ready.\n");
+            } else {
+                handle_sensor_events();
+            }
+
+            if (!display_started) {
+                show_image(Number1CardDark_bin);
+                display_started = true;
+            }
+
+            apply_received_command();
+            publish_status();
+        } else {
+            // Do not save physical inputs for later replay.
+            xQueueReset(net_event_q);
+        }
+
+        mqtt_was_ready = mqtt_ready;
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
