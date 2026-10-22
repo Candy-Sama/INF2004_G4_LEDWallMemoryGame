@@ -56,6 +56,7 @@ add_executable(LED_MEMORY_GAME
     ${APP_MAIN}
     src/display/ledmatrix.c
     src/display/imagedata_bin.S
+    src/logic/game_logic.c
     src/network/mqtt_handler.c
     src/network/wifi_manager.c
     src/sensors/imudriver.c
@@ -76,6 +77,7 @@ target_include_directories(LED_MEMORY_GAME PRIVATE
                         config
                         src/display
                         src/gameengine
+                        src/logic
                         src/network
                         src/sensors
                         ${CMAKE_CURRENT_LIST_DIR}
