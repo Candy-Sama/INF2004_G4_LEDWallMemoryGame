@@ -30,6 +30,7 @@ void cyw43_arch_lwip_begin(void);
 void cyw43_arch_lwip_end(void);
 u32_t sys_now(void);
 mqtt_client_t *mqtt_client_new(void);
+void mqtt_disconnect(mqtt_client_t *client);
 int mqtt_client_is_connected(mqtt_client_t *);
 err_t mqtt_client_connect(mqtt_client_t *, const ip_addr_t *, u16_t, connection_cb_t, void *, const struct mqtt_connect_client_info_t *);
 void mqtt_set_inpub_callback(mqtt_client_t *, publish_cb_t, data_cb_t, void *);
