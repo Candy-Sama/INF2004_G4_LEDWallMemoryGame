@@ -1,7 +1,7 @@
 #ifndef WIFI_CREDENTIALS_H
 #define WIFI_CREDENTIALS_H
 
-#define WIFI_SSID "Farhah"
-#define WIFI_PASSWORD "T0416529i"
+#define WIFI_SSID "SE04_LEDMemoryGameWifi"
+#define WIFI_PASSWORD "e3sneffpkf"
 
 #endif
