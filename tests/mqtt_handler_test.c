@@ -23,6 +23,16 @@ static void completed(void *arg, int8_t result) {
     assert(arg == &completion_result);
     completion_result = result;
 }
+static int disconnect_calls;
+static err_t dns_result = ERR_OK;
+static err_t connect_result = ERR_OK;
+static char last_client_id[64];
+typedef struct {
+    void (*callback)(const char *, const ip_addr_t *, void *);
+    void *arg;
+} dns_request_t;
+static dns_request_t dns_requests[32];
+static size_t dns_calls;
 
 void cyw43_arch_lwip_begin(void) { assert(locks == 0); ++locks; }
 void cyw43_arch_lwip_end(void) { assert(locks == 1); --locks; }
@@ -31,14 +41,23 @@ mqtt_client_t *mqtt_client_new(void) { ++allocations; return &fake_client; }
 int mqtt_client_is_connected(mqtt_client_t *c) { assert(locks); return c->connected; }
 const char *ipaddr_ntoa(const ip_addr_t *p) { (void)p; return "test"; }
 err_t dns_gethostbyname(const char *n, ip_addr_t *p, void (*cb)(const char *, const ip_addr_t *, void *), void *a) {
-    (void)n; (void)p; (void)cb; (void)a; assert(locks); return ERR_OK;
+    (void)n;
+    assert(locks == 1);
+    assert(dns_calls < sizeof(dns_requests) / sizeof(dns_requests[0]));
+    dns_requests[dns_calls++] = (dns_request_t){cb, a};
+    p->unused = 0;
+    return dns_result;
 }
 err_t mqtt_client_connect(mqtt_client_t *c, const ip_addr_t *p, u16_t port, connection_cb_t cb, void *a, const struct mqtt_connect_client_info_t *info) {
     (void)c; (void)p; (void)port; (void)a; assert(info->client_id); assert(locks);
     assert(!strcmp(info->will_topic, "test/status"));
     assert(!strcmp(info->will_msg, "offline"));
     assert(info->will_qos == 1 && info->will_retain == 1 && info->keep_alive == 10);
-    ++connect_calls; connection_callback = cb; return ERR_OK;
+    assert(strlen(info->client_id) < sizeof(last_client_id));
+    strcpy(last_client_id, info->client_id);
+    ++connect_calls;
+    connection_callback = cb;
+    return connect_result;
 }
 void mqtt_set_inpub_callback(mqtt_client_t *c, publish_cb_t p, data_cb_t d, void *a) {
     (void)c; (void)a; incoming_callback = p; data_callback = d;
@@ -68,8 +87,180 @@ static void inject(const char *topic, const uint8_t *bytes, size_t length) {
     data_callback(NULL, bytes, (u16_t)length, MQTT_DATA_FLAG_LAST);
     cyw43_arch_lwip_end();
 }
+void mqtt_disconnect(mqtt_client_t *client) {
+    assert(locks == 1);
+    assert(client == &fake_client);
+
+    ++disconnect_calls;
+    client->connected = 0;
+}
+// Deliver delayed DNS replies under the same lock used by the real SDK.
+static void dns_reply(size_t request, bool found) {
+    assert(request < dns_calls);
+    ip_addr_t address = {0};
+    cyw43_arch_lwip_begin();
+    dns_requests[request].callback("test-broker", found ? &address : NULL,
+                                   dns_requests[request].arg);
+    cyw43_arch_lwip_end();
+}
+
+// These cases run before the subscription-limit test, with two saved filters.
+static void finish_reconnect(void) {
+    int calls_before = subscribe_calls;
+    connection_event(MQTT_CONNECT_ACCEPTED);
+    assert(subscribe_calls == calls_before + 1);
+    assert(strcmp(subscribed_topic, "arbitrary/input") == 0 && subscribed_qos == 0);
+    assert(!mqtt_is_ready());
+    acknowledge(ERR_OK);
+    assert(!mqtt_is_ready());
+    init_mqtt_client("test-client");
+    assert(subscribe_calls == calls_before + 2);
+    assert(strcmp(subscribed_topic, "events/+/state") == 0 && subscribed_qos == 1);
+    acknowledge(ERR_OK);
+    assert(mqtt_is_ready());
+}
+
+static void test_explicit_reset(void) {
+    mqtt_message_t message;
+    const uint8_t bytes[] = {1, 0, 2};
+    int disconnects_before = disconnect_calls;
+    int connects_before = connect_calls;
+    uint32_t drops_before = mqtt_received_drop_count();
+    inject("stale", bytes, sizeof(bytes));
+    cyw43_arch_lwip_begin();
+    incoming_callback(NULL, "partial", 4);
+    data_callback(NULL, bytes, 1, 0);
+    cyw43_arch_lwip_end();
+
+    mqtt_reset_connection();
+    assert(disconnect_calls == disconnects_before + 1);
+    assert(!is_mqtt_connected() && !mqtt_is_ready());
+    assert(!mqtt_receive(&message));
+    assert(mqtt_received_drop_count() == drops_before + 2);
+    assert(!mqtt_send("offline", bytes, sizeof(bytes)));
+
+    // Repeated reset must not count the same discarded messages twice.
+    mqtt_reset_connection();
+    assert(mqtt_received_drop_count() == drops_before + 2);
+    init_mqtt_client("test-client");
+    assert(connect_calls == connects_before);
+    clock_ms += 4999;
+    init_mqtt_client("test-client");
+    assert(connect_calls == connects_before);
+    ++clock_ms;
+    init_mqtt_client("test-client");
+    assert(connect_calls == connects_before + 1 && allocations == 1);
+    finish_reconnect();
+
+    // Fresh traffic still works after all old receive state was removed.
+    inject("fresh", bytes, sizeof(bytes));
+    assert(mqtt_receive(&message));
+    assert(message.length == sizeof(bytes) && !strcmp(message.topic, "fresh"));
+    assert(!memcmp(message.payload, bytes, sizeof(bytes)));
+    puts("PASS: reset, stale-message cleanup, retry boundary, resubscription and fresh traffic");
+}
+
+static void test_cancelled_dns(void) {
+    mqtt_reset_connection();
+    clock_ms += 5000;
+    dns_result = ERR_INPROGRESS;
+    int connects_before = connect_calls;
+    size_t old_lookup = dns_calls;
+    init_mqtt_client("old-client");
+    assert(dns_calls == old_lookup + 1 && connect_calls == connects_before);
+    // Calling service again must not start overlapping lookups.
+    init_mqtt_client("old-client");
+    assert(dns_calls == old_lookup + 1);
+
+    mqtt_reset_connection();
+    dns_reply(old_lookup, true);
+    assert(connect_calls == connects_before);
+    clock_ms += 5000;
+    size_t fresh_lookup = dns_calls;
+    init_mqtt_client("fresh-client");
+    assert(dns_calls == fresh_lookup + 1);
+    // Neither a successful nor failed OLD reply may affect the fresh lookup.
+    dns_reply(old_lookup, true);
+    dns_reply(old_lookup, false);
+    init_mqtt_client("fresh-client");
+    assert(connect_calls == connects_before && dns_calls == fresh_lookup + 1);
+    dns_reply(fresh_lookup, true);
+    assert(connect_calls == connects_before + 1);
+    assert(strcmp(last_client_id, "fresh-client") == 0);
+    dns_result = ERR_OK;
+    finish_reconnect();
+    puts("PASS: cancelled/stale DNS cannot revive or cancel a newer attempt");
+}
+
+static void test_reset_during_connect_and_subscribe(void) {
+    mqtt_reset_connection();
+    clock_ms += 5000;
+    init_mqtt_client("test-client"); // Connect started, no acceptance yet.
+    int connects_before = connect_calls;
+    mqtt_reset_connection();
+    assert(!is_mqtt_connected() && !mqtt_is_ready());
+    clock_ms += 5000;
+    init_mqtt_client("test-client");
+    assert(connect_calls == connects_before + 1);
+    connection_event(MQTT_CONNECT_ACCEPTED); // First SUBACK is still pending.
+    assert(!mqtt_is_ready());
+    mqtt_reset_connection();
+    // Real lwIP cancels pending requests: do not invent a late SUBACK here.
+    clock_ms += 5000;
+    init_mqtt_client("test-client");
+    finish_reconnect();
+    puts("PASS: reset during TCP/MQTT connect and pending subscription");
+}
+
+static void test_dns_and_connect_failures(void) {
+    mqtt_reset_connection();
+    clock_ms += 5000;
+    dns_result = ERR_MEM;
+    size_t calls_before = dns_calls;
+    int connects_before = connect_calls;
+    init_mqtt_client("test-client");
+    assert(dns_calls == calls_before + 1 && connect_calls == connects_before);
+    clock_ms += 4999;
+    init_mqtt_client("test-client");
+    assert(dns_calls == calls_before + 1);
+    ++clock_ms;
+    dns_result = ERR_INPROGRESS;
+    init_mqtt_client("test-client");
+    dns_reply(dns_calls - 1, false); // Resolver completes without an address.
+    clock_ms += 5000;
+    dns_result = ERR_OK;
+    connect_result = ERR_MEM;
+    init_mqtt_client("test-client");
+    assert(connect_calls == connects_before + 1);
+    init_mqtt_client("test-client");
+    assert(connect_calls == connects_before + 1);
+    clock_ms += 5000;
+    connect_result = ERR_OK;
+    init_mqtt_client("test-client");
+    assert(connect_calls == connects_before + 2);
+    finish_reconnect();
+    puts("PASS: DNS start/final failure and immediate connect failure remain retryable");
+}
+
+static void test_retry_clock_wrap(void) {
+    clock_ms = UINT32_MAX - 1000;
+    mqtt_reset_connection();
+    int connects_before = connect_calls;
+    clock_ms += 4999; // Unsigned clock wraps here.
+    init_mqtt_client("test-client");
+    assert(connect_calls == connects_before);
+    ++clock_ms;
+    init_mqtt_client("test-client");
+    assert(connect_calls == connects_before + 1);
+    finish_reconnect();
+    assert(allocations == 1);
+    puts("PASS: retry timing across clock wrap; client and Will configuration reused");
+}
+
 int main(void) {
     mqtt_message_t message;
+    mqtt_reset_connection(); // Safe before client allocation.
+    assert(disconnect_calls == 0 && !is_mqtt_connected());
     assert(!mqtt_receive(NULL) && !mqtt_receive(&message));
     assert(!mqtt_send("test", "x", 1));
     assert(!mqtt_subscribe_topic(NULL));
@@ -182,6 +373,12 @@ int main(void) {
     assert(!mqtt_is_ready());
     init_mqtt_client("test-client"); acknowledge(ERR_OK);
     assert(mqtt_is_ready());
+
+    test_explicit_reset();
+    test_cancelled_dns();
+    test_reset_during_connect_and_subscribe();
+    test_dns_and_connect_failures();
+    test_retry_clock_wrap();
 
     // Exactly eight unique subscriptions, including wildcards.
     for (unsigned n = 2; n < MQTT_MAX_SUBSCRIPTIONS; ++n) {

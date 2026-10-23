@@ -6,6 +6,7 @@
 
 int cyw43_state;
 static int init_calls, connect_calls, init_result, connect_result;
+static int link_status = CYW43_LINK_UP;
 static const char *expected_ssid, *expected_password;
 int cyw43_arch_init(void) { ++init_calls; return init_result; }
 void cyw43_arch_enable_sta_mode(void) {}
@@ -19,7 +20,7 @@ int cyw43_arch_wifi_connect_timeout_ms(const char *ssid, const char *password,
 }
 int cyw43_tcpip_link_status(int *state, int interface) {
     assert(state == &cyw43_state && interface == CYW43_ITF_STA);
-    return CYW43_LINK_UP;
+    return link_status;
 }
 int main(void) {
     assert(!wifi_init_and_connect(NULL, "test-only"));
@@ -43,5 +44,21 @@ int main(void) {
     assert(wifi_init_and_connect(expected_ssid, expected_password));
     assert(init_calls == 2 && connect_calls == 2);
     assert(is_wifi_connected());
-    puts("Wi-Fi parameter tests passed.");
+
+    // Simulate an established link dropping, then a failed and successful rejoin.
+    link_status = 0;
+    assert(!is_wifi_connected());
+    int previous_init_calls = init_calls;
+    int previous_connect_calls = connect_calls;
+    connect_result = -1;
+    assert(!wifi_init_and_connect(expected_ssid, expected_password));
+    assert(!is_wifi_connected());
+    assert(init_calls == previous_init_calls);
+    connect_result = 0;
+    assert(wifi_init_and_connect(expected_ssid, expected_password));
+    link_status = CYW43_LINK_UP;
+    assert(is_wifi_connected());
+    assert(init_calls == previous_init_calls);
+    assert(connect_calls == previous_connect_calls + 2);
+    puts("Wi-Fi parameter and retry tests passed.");
 }

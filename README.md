@@ -207,6 +207,16 @@ its connection after startup does not stop the firmware. Avoid sharing screensho
 
 ## Validation
 
+Run all host suites, including the reconnection cases, with:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/run_host_tests.ps1
+```
+
+See [Reconnection test results](docs/MQTT_RECONNECTION_TESTS.md) for coverage,
+limitations and the hardware tests that remain pending.
+
+
 Host tests use stubbed SDK calls to exercise the actual MQTT module. They cover
 subscription registration/copying/limits, late registration, retry and readiness,
 fragmented binary/empty/maximum-sized messages, FIFO overflow, invalid inputs,
