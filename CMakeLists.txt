@@ -60,6 +60,7 @@ add_executable(LED_MEMORY_GAME
     src/network/mqtt_handler.c
     src/network/wifi_manager.c
     src/sensors/imudriver.c
+    src/layout/node_identity.c
 )
 
 pico_set_program_name(LED_MEMORY_GAME "LED_MEMORY_GAME")
@@ -80,6 +81,7 @@ target_include_directories(LED_MEMORY_GAME PRIVATE
                         src/logic
                         src/network
                         src/sensors
+                        src/layout
                         ${CMAKE_CURRENT_LIST_DIR}
                 )
 

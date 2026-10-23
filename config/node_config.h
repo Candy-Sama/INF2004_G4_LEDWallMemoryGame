@@ -2,10 +2,10 @@
 #define NODE_CONFIG_H
 
 // Change this to the number of the board you are about to flash.
-#define NODE_ID 1
+//#define NODE_ID 2
 
 // Destination for node 1's movement commands.
-#define PEER_NODE_ID 2
+//#define PEER_NODE_ID 2
 
 // Desk movement demo: only node 1 sends commands to PEER_NODE_ID.
 #define ENABLE_MOTION_TEST 1
@@ -15,10 +15,10 @@
 #define MOTION_QUIET_MS 200
 #define MOTION_COOLDOWN_MS 800
 
-
+/* 
 #if NODE_ID < 1 || NODE_ID > 6
 #error "NODE_ID must be between 1 and 6"
-#endif
+#endif 
 
 // Two steps expand a number macro before converting it to text.
 #define NODE_STRING_IMPL(value) #value
@@ -29,5 +29,10 @@
 #define MQTT_PRESENCE_TOPIC MQTT_STATUS_TOPIC "/status"
 #define MQTT_STATUS_MESSAGE "online"
 #define MQTT_PEER_COMMAND_TOPIC "se4/memorygame/node" NODE_STRING(PEER_NODE_ID) "/command"
+*/
+
+// Topics are built at runtime from the panel number (node_identity.c):
+#define MQTT_TOPIC_ROOT "se4/memorygame"
+#define MQTT_STATUS_MESSAGE "online"
 
 #endif

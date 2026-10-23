@@ -8,6 +8,8 @@
 #include "task.h"
 #include "queue.h"
 #include "node_config.h"
+#include "grid_config.h"
+#include "node_identity.h"
 #include "wifi_manager.h"
 #include "wifi_creds.h" // Standard build: application supplies configured credentials.
 #include "mqtt_handler.h"
@@ -38,12 +40,11 @@
 #define DISPLAY_TASK_STACK  512
 
 // Pick your Master A id
-#define IS_GAME_MASTER (NODE_ID == 1)
+#define IS_GAME_MASTER (identity_is_master())
 #define GAME_TASK_PRIORITY   3
 #define GAME_TASK_STACK      1024
-#define GAME_TEST_FORCE_ONLINE 1
+#define GAME_TEST_FORCE_ONLINE 1 
 
- 
 // typedef struct { uint8_t r, g, b; } display_cmd_t;
 typedef struct {
     const uint8_t *image; //NULL means fill with R,G,B
@@ -74,6 +75,22 @@ static void show_image(const uint8_t *rgb){
     xQueueSend(display_q, &cmd, 0);
 }
 
+static void show_own_number(void) {
+    static const uint8_t *const number_cards[] = {
+        Number1Card_bin,
+        Number2Card_bin,
+        Number3Card_bin,
+        Number4Card_bin,
+        Number5Card_bin,
+        Number6Card_bin,
+    };
+    int id = identity_node_id();   // 1..6 (0 = unknown)
+    if (id >= 1 && id <= (int)(sizeof(number_cards) / sizeof(number_cards[0]))) {
+        show_image(number_cards[id - 1]);
+    } else {
+        show_colour(12, 6, 0);     // should not happen: unknown boards never reach here
+    }
+}
 
 static bool setup_sensor(void) {
     i2c_init(I2C_PORT, 400 * 1000);
@@ -111,7 +128,7 @@ static void sensor_task(void *arg) {
 #if IMU_LOG_READINGS
             if ((int32_t)(xTaskGetTickCount() - next_print) >= 0) {
                 printf("Node %d IMU: X=%d mg Y=%d mg Z=%d mg\n",
-                       NODE_ID, sample.x_mg, sample.y_mg, sample.z_mg);
+                       identity_node_id(), sample.x_mg, sample.y_mg, sample.z_mg);
                 next_print = xTaskGetTickCount() + pdMS_TO_TICKS(500);
             }
 #endif
@@ -119,7 +136,7 @@ static void sensor_task(void *arg) {
                                                 sample.z_mg,
                                                 to_ms_since_boot(get_absolute_time()));
             // Only node 1 publishes movement commands.
-            if (moved && ENABLE_MOTION_TEST && NODE_ID == 1) {
+            if (moved && ENABLE_MOTION_TEST) {
                 app_event_t evt = APP_EVT_MOTION;
                 xQueueSend(net_event_q, &evt, 0);
             }
@@ -187,7 +204,7 @@ static void sensor_task(void *arg) {
 #if IMU_LOG_READINGS
     if (time_reached(next_print)) {
         printf("Node %d IMU: X=%d mg Y=%d mg Z=%d mg\n",
-               NODE_ID, sample.x_mg, sample.y_mg, sample.z_mg);
+               identity_node_id(), sample.x_mg, sample.y_mg, sample.z_mg);
         next_print = make_timeout_time_ms(500);
     }
 #endif
@@ -203,8 +220,8 @@ static void send_movement(void) {
         return;
     }
     const char *card = send_heart_next ? "Heart" : "Dark Heart";
-    if (mqtt_send(MQTT_PEER_COMMAND_TOPIC, card, strlen(card))) {
-        printf("Movement: queued %s to %s\n", card, MQTT_PEER_COMMAND_TOPIC);
+    if (mqtt_send(identity_command_topic(), card, strlen(card))) {
+        printf("Movement: queued %s to %s\n", card, identity_command_topic());
         show_image(send_heart_next ? heartCard_bin : heartCardDark_bin);
         send_heart_next = !send_heart_next;
     } else {
@@ -234,7 +251,7 @@ static void apply_received_command(void) {
             }
             continue;
         }
-        if (strcmp(message.topic, MQTT_COMMAND_TOPIC) != 0) continue;
+        if (strcmp(message.topic, identity_command_topic()) != 0) continue;
         if (message.length == 5 && memcmp(message.payload, "Heart", 5) == 0) {
             show_image(heartCard_bin);
             printf("LED command applied: Heart\n");
@@ -261,7 +278,7 @@ static void publish_status(void) {
     static TickType_t next_publish;
     TickType_t now = xTaskGetTickCount();
     if ((int32_t)(now - next_publish) >= 0) {
-        mqtt_send_ex(MQTT_PRESENCE_TOPIC, MQTT_STATUS_MESSAGE,
+        mqtt_send_ex(identity_status_topic(), MQTT_STATUS_MESSAGE,
                      strlen(MQTT_STATUS_MESSAGE), 1, true, NULL, NULL);
         next_publish = now + pdMS_TO_TICKS(1000);
     }
@@ -292,7 +309,7 @@ static void net_task(void *arg) {
     static char client_id[32];   // must stay valid for the lifetime of the connection
     pico_get_unique_board_id_string(board_id, sizeof(board_id));
     snprintf(client_id, sizeof(client_id), "SE4_%s", board_id);
-    printf("MQTT client: %s\nListen: %s\n", client_id, MQTT_COMMAND_TOPIC);
+    printf("MQTT client: %s\nListen: %s\n", client_id, identity_command_topic());
  
     // Wi-Fi setup must run inside a task when using the FreeRTOS cyw43 arch.
     while (!wifi_init_and_connect(WIFI_SSID, WIFI_PASSWORD)) {
@@ -301,11 +318,11 @@ static void net_task(void *arg) {
     }
  
     // Broker publishes retained 'offline' if this connection disappears.
-    if (!mqtt_configure_will(MQTT_PRESENCE_TOPIC, "offline", 10)) {
+    if (!mqtt_configure_will(identity_status_topic(), "offline", 10)) {
         printf("Could not configure MQTT Last Will.\n");
         vTaskDelete(NULL);
     }
-    if (!mqtt_subscribe_topic(MQTT_COMMAND_TOPIC)) {
+    if (!mqtt_subscribe_topic(identity_command_topic())) {
         printf("Could not register the command topic.\n");
         vTaskDelete(NULL);
     }
@@ -318,55 +335,47 @@ static void net_task(void *arg) {
  
     bool display_started = false;
     bool wifi_was_connected = true;
+
     bool mqtt_was_ready = false;
-
-    TickType_t next_wifi_retry = xTaskGetTickCount(); //Reconnection Protocol part 1
-    
-
+    TickType_t next_wifi_retry = xTaskGetTickCount(); // Reconnection Protocol part 1
+ 
     for (;;) {
         bool wifi_connected = is_wifi_connected();
-
-
-        //Wifi Loss block
+        // Wifi Loss Block
         if (wifi_connected != wifi_was_connected) {
             report_wifi_status(wifi_connected);
-
             if (!wifi_connected) {
                 mqtt_reset_connection();
                 mqtt_was_ready = false;
                 next_wifi_retry = xTaskGetTickCount();
             }
-
             wifi_was_connected = wifi_connected;
         }
-
+ 
         // Reconnection Protocol Part 2 (Retry block)
         if (!wifi_connected){ 
             TickType_t now = xTaskGetTickCount();
             if ((int32_t)(now - next_wifi_retry) >= 0){
                 printf("Attempting Wi-Fi reconnection...\n");
+            bool reconnected =
+                wifi_init_and_connect(WIFI_SSID, WIFI_PASSWORD);
 
-                bool reconnected =
-                    wifi_init_and_connect(WIFI_SSID, WIFI_PASSWORD);
+            next_wifi_retry =
+                xTaskGetTickCount() + pdMS_TO_TICKS(5000);
 
-                next_wifi_retry =
-                    xTaskGetTickCount() + pdMS_TO_TICKS(5000);
+            // Discard movements accumulated during the connection attempt.
+            xQueueReset(net_event_q);
 
-                // Discard movements accumulated during the connection attempt.
-                xQueueReset(net_event_q);
-
-                if (!reconnected) {
-                    printf("Wi-Fi retry failed. Waiting 5 seconds.\n");
+            if (!reconnected) {
+                printf("Wi-Fi retry failed. Waiting 5 seconds.\n");
                 }
             }
-
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
+                vTaskDelay(pdMS_TO_TICKS(10));
+                continue;
+            
         }
-
         // Wi-Fi is available here: the disconnected branch uses continue.
         init_mqtt_client(client_id);
-
         bool mqtt_ready = mqtt_is_ready();
 
         if (mqtt_ready) {
@@ -379,7 +388,7 @@ static void net_task(void *arg) {
             }
 
             if (!display_started) {
-                show_image(Number1CardDark_bin);
+                show_own_number();
                 display_started = true;
             }
 
@@ -401,15 +410,30 @@ static void net_task(void *arg) {
 static void display_task(void *arg) {
     (void)arg;
     ledmatrix_init();
-     display_cmd_t cmd;
+    display_cmd_t cmd = {0};
+    bool have_cmd = false;
     for (;;) {
-        if (xQueueReceive(display_q, &cmd, portMAX_DELAY) == pdTRUE) {
-            if (cmd.image){
-                show_image_rgb(cmd.image);
-            }else{
+        if (xQueueReceive(display_q, &cmd, pdMS_TO_TICKS(500)) == pdTRUE) {
+            have_cmd = true;
+        } else if (!have_cmd) {
+            continue;
+        }
+        if (cmd.image) {
+            show_image_rgb(cmd.image);
+        } else {
             ledmatrix_fill(cmd.r, cmd.g, cmd.b);
         }
-        }
+    }
+}
+
+/* ------------------------------------------------- unknown-board helper */
+
+// A board missing from config/board_map.h repeats its ID so it can be copied even if the serial monitor was opened late.
+static void unknown_board_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        printf("UNKNOWN BOARD: %s  (add it to config/board_map.h)\n", identity_board_id());
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
  
@@ -437,7 +461,16 @@ int main(void) {
     }
     sleep_ms(1000);
 #endif
-    printf("\n--- NODE %d: FREERTOS SENSOR / MQTT / LED DEMO ---\n", NODE_ID);
+    //printf("\n--- NODE %d: FREERTOS SENSOR / MQTT / LED DEMO ---\n", NODE_ID);
+
+    bool identity_known = identity_init();
+    if (identity_known) {
+        printf("\n--- PANEL %d (row %d, col %d) board %s ---\n",
+               identity_node_id(), grid_row(identity_node_id()),
+               grid_col(identity_node_id()), identity_board_id());
+    } else {
+        printf("\n--- UNKNOWN BOARD %s ---\n", identity_board_id());
+    }
 
     srand(get_rand_32());
  
@@ -450,11 +483,13 @@ int main(void) {
         for (;;) {}
     }
 
-    if (IS_GAME_MASTER) {
+    // Game master only starts if the board is known
+    if (identity_known && IS_GAME_MASTER) {
         if (!game_shared_init(&game)) {
             printf("Game init failed.\n");
             for (;;) {}
         }
+    
     
 #if GAME_TEST_FORCE_ONLINE
     for (uint8_t n = 0; n < NUM_PANELS; n++) game_shared_set_online(&game, n, true);
@@ -462,9 +497,14 @@ int main(void) {
         xTaskCreate(game_task, "game", GAME_TASK_STACK, NULL, GAME_TASK_PRIORITY, NULL);
     }
  
-    xTaskCreate(sensor_task,  "sensor",  SENSOR_TASK_STACK,  NULL, SENSOR_TASK_PRIORITY,  NULL);
-    xTaskCreate(net_task,     "net",     NET_TASK_STACK,     NULL, NET_TASK_PRIORITY,     NULL);
     xTaskCreate(display_task, "display", DISPLAY_TASK_STACK, NULL, DISPLAY_TASK_PRIORITY, NULL);
+    if (identity_known) {
+        xTaskCreate(sensor_task,  "sensor",  SENSOR_TASK_STACK,  NULL, SENSOR_TASK_PRIORITY,  NULL);
+        xTaskCreate(net_task,     "net",     NET_TASK_STACK,     NULL, NET_TASK_PRIORITY,     NULL);
+    } else {
+        show_colour(12, 6, 0);   // dim orange = board not in BOARD_MAP
+        xTaskCreate(unknown_board_task, "unknown", 512, NULL, 1, NULL);
+    }
  
     vTaskStartScheduler();
     for (;;) {}   // only reached if the scheduler could not start (out of heap)
