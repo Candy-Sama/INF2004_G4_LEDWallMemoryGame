@@ -17,7 +17,23 @@ heartCardDark_bin:
 Number1Card_bin:
 .incbin "images_bin/Number1Card.bin"
 
-.global Number1CardDark_bin
-Number1CardDark_bin:
-.incbin "images_bin/Number1CardDark.bin"
+.global Number2Card_bin
+Number2Card_bin:
+.incbin "images_bin/Number2Card.bin"
+
+.global Number3Card_bin
+Number3Card_bin:
+.incbin "images_bin/Number3Card.bin"
+
+.global Number4Card_bin
+Number4Card_bin:
+.incbin "images_bin/Number4Card.bin"
+
+.global Number5Card_bin
+Number5Card_bin:
+.incbin "images_bin/Number5Card.bin"
+
+.global Number6Card_bin
+Number6Card_bin:
+.incbin "images_bin/Number6Card.bin"
 
