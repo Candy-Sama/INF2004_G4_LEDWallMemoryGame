@@ -61,6 +61,10 @@ add_executable(LED_MEMORY_GAME
     src/network/wifi_manager.c
     src/sensors/imudriver.c
     src/layout/node_identity.c
+    src/display/display.c
+    src/logic/game_task.c
+    src/network/net.c
+    src/sensors/sensor.c
 )
 
 pico_set_program_name(LED_MEMORY_GAME "LED_MEMORY_GAME")
@@ -77,7 +81,6 @@ pico_enable_stdio_usb(LED_MEMORY_GAME 1)
 target_include_directories(LED_MEMORY_GAME PRIVATE
                         config
                         src/display
-                        src/gameengine
                         src/logic
                         src/network
                         src/sensors
