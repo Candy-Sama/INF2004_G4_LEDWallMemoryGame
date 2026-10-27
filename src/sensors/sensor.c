@@ -10,7 +10,7 @@
 #include "motion_detector.h"
 
 #define I2C_PORT i2c0
-#define I2C_SDA 0
+#define I2C_SDA 4
 #define I2C_SCL 1
 #define SENSOR_TASK_PRIORITY 3
 #define SENSOR_TASK_STACK    1024
