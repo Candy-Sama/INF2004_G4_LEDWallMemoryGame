@@ -54,6 +54,23 @@ void show_image_rgb(const uint8_t *rgb){
     }
 }
 
+void show_image_rgb_rotated(const uint8_t *rgb, uint8_t quarter_turns){
+    quarter_turns &= 3;
+    for (int y = 0; y < 8; y++){
+        for (int x = 0; x < 8; x++){
+            int sx, sy;   // source pixel that lands on destination (x, y)
+            switch (quarter_turns){
+                case 1:  sx = y;     sy = 7 - x; break;   // 90 deg clockwise
+                case 2:  sx = 7 - x; sy = 7 - y; break;   // 180 deg
+                case 3:  sx = 7 - y; sy = x;     break;   // 270 deg clockwise
+                default: sx = x;     sy = y;     break;
+            }
+            const uint8_t *px = &rgb[(sy * 8 + sx) * 3];
+            put_pixel(urgb_u32(px[0], px[1], px[2]));
+        }
+    }
+}
+
 void ledmatrix_init(void) {
     uint offset = pio_add_program(pio0, &ws2812_program);
     ws2812_program_init(pio0, 0, offset, LED_PIN, 800000, false);

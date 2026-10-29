@@ -20,9 +20,11 @@
 #include "sensor.h"        // CHANGED: app_event_t + sensor queue
 #include "game_logic.h"    // CHANGED: MQTT_TAP/STATE/REVEAL topic macros
 #include "game_task.h"     // CHANGED: IS_GAME_MASTER + the two game hooks
+#include "imu_orientation.h"      // shared rotation payload check
 
 #define NET_TASK_PRIORITY 2     // CHANGED: moved from main.c
 #define NET_TASK_STACK    2048  // CHANGED: moved from main.c
+
 
 static QueueHandle_t net_event_q;   // CHANGED: set in net_start() from the sensor module
 
@@ -59,6 +61,21 @@ static void apply_received_command(void) {
             game_handle_tap_payload((const uint8_t *)message.payload, message.length);
             continue;
         }
+        #if ENABLE_ORIENTATION_SYNC
+            // Another panel (or this one, echoed back) was rotated: follow it.
+        if (strcmp(message.topic, MQTT_ORIENTATION_TOPIC) == 0) {
+            uint8_t turns;
+            if (orientation_sync_decode((const uint8_t *)message.payload, message.length, &turns)) {
+                display_set_rotation(turns);
+                printf("Orientation sync: rotation set to %u\n", (unsigned)turns);
+            } else {
+                printf("Orientation sync: ignored invalid payload (%u bytes).\n",
+                        (unsigned)message.length);
+            }
+            continue;
+        }
+        #endif
+
         if (strcmp(message.topic, identity_command_topic()) != 0) continue;
         if (message.length == 5 && memcmp(message.payload, "Heart", 5) == 0) {
             display_show_image(heartCard_bin);                       // CHANGED
@@ -91,6 +108,22 @@ static void publish_status(void) {
         next_publish = now + pdMS_TO_TICKS(1000);
     }
 }
+
+#if ENABLE_ORIENTATION_SYNC
+// Share a rotation caused by this panel's own sensor. Retained QoS 1 state (not an
+// event), so panels that boot or reconnect later still learn the current rotation.
+// If MQTT is not ready the change stays pending in the sensor module.
+static void publish_orientation(void) {
+    uint8_t turns;
+    if (!sensor_take_orientation_change(&turns)) return;
+    if (!mqtt_send_ex(MQTT_ORIENTATION_TOPIC, &turns, 1, 1, true, NULL, NULL)) {
+        printf("Orientation sync: publish failed.\n");
+    } else {
+        printf("Orientation sync: shared rotation %u\n", (unsigned)turns);
+    }
+}
+#endif
+
 
 static void report_wifi_status(bool connected) {
     printf("Wi-Fi %s.\n", connected ? "connected" : "disconnected");
@@ -129,6 +162,14 @@ static void net_task(void *arg) {
         printf("Could not register the tap topic.\n");
         vTaskDelete(NULL);
     }
+
+    #if ENABLE_ORIENTATION_SYNC
+    // Every panel follows the shared rotation.
+    if (!mqtt_subscribe_topic_qos(MQTT_ORIENTATION_TOPIC, 1)) {
+        printf("Could not register the orientation topic.\n");
+        vTaskDelete(NULL);
+    }
+    #endif
 
     bool display_started = false;
     bool wifi_was_connected = true;
@@ -188,6 +229,10 @@ static void net_task(void *arg) {
             }
 
             apply_received_command();
+            #if ENABLE_ORIENTATION_SYNC
+            publish_orientation();
+            #endif
+
             publish_status();
             if (IS_GAME_MASTER) game_publish_output();          // CHANGED (was publish_game_output)
         } else {

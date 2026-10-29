@@ -35,6 +35,7 @@ void set_pixel(int x, int y, uint32_t color);
 void show_frame(void);
 void set_brightness(uint8_t brightness);
 void show_image_rgb(const uint8_t *rgb);
+void show_image_rgb_rotated(const uint8_t *rgb, uint8_t quarter_turns);
 
 // One 64-pixel WS2812 panel, data on GP2, using PIO0 state machine 0.
 void ledmatrix_init(void);
