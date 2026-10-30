@@ -15,18 +15,6 @@
 #define WAIT_FOR_USB 0
 #endif
 
-/* ------------------------------------------------- unknown-board helper */
-
-// A board missing from config/board_map.h repeats its ID so it can be copied
-// even if the serial monitor was opened late.
-static void unknown_board_task(void *arg) {
-    (void)arg;
-    for (;;) {
-        printf("UNKNOWN BOARD: %s  (add it to config/board_map.h)\n", identity_board_id());
-        vTaskDelay(pdMS_TO_TICKS(2000));
-    }
-}
-
 /* ------------------------------------------------------- FreeRTOS hooks */
 
 void vApplicationMallocFailedHook(void) {
@@ -52,27 +40,30 @@ int main(void) {
     sleep_ms(1000);
 #endif
 
-    bool known = identity_init();
-    if (known) {
+    if (!identity_init()) {                      // fails only if BOARD_MAP itself is invalid
+        printf("identity failed (check BOARD_MAP)\n");
+        for (;;) {}
+    }
+
+    bool assigned = identity_is_assigned();
+    if (assigned) {
         printf("\n--- PANEL %d (row %d, col %d) board %s ---\n",
                identity_node_id(), grid_row(identity_node_id()),
                grid_col(identity_node_id()), identity_board_id());
     } else {
-        printf("\n--- UNKNOWN BOARD %s ---\n", identity_board_id());
+        printf("\n--- UNASSIGNED BOARD %s: will request a number from the master ---\n",
+               identity_board_id());
     }
 
     srand(get_rand_32());
 
     if (!display_start()) { printf("display failed\n"); for (;;) {} }
-    if (known && IS_GAME_MASTER && !game_start()) { printf("game failed\n"); for (;;) {} }
+    if (assigned && IS_GAME_MASTER && !game_start()) { printf("game failed\n"); for (;;) {} }
 
-    if (known) {
-        if (!sensor_start()) { printf("sensor failed\n"); for (;;) {} }   // before net_start()
-        if (!net_start())    { printf("net failed\n");    for (;;) {} }
-    } else {
-        display_show_colour(12, 6, 0);   // dim orange = board not in BOARD_MAP
-        xTaskCreate(unknown_board_task, "unknown", 512, NULL, 1, NULL);
-    }
+    if (!sensor_start()) { printf("sensor failed\n"); for (;;) {} }   // before net_start()
+    if (!net_start())    { printf("net failed\n");    for (;;) {} }
+
+    if (!assigned) display_show_colour(12, 6, 0);   // dim orange until a number arrives
 
     vTaskStartScheduler();
     for (;;) {}

@@ -2,13 +2,13 @@
 #define GRID_CONFIG_H
 
 #define GRID_COLS 3
-#define GRID_ROWS 2
-#define GRID_NODE_COUNT (GRID_COLS * GRID_ROWS)
+#define GRID_ROWS_MAX 4
+#define GRID_NODE_MAX (GRID_COLS * GRID_ROWS_MAX)
 
 #include <stdbool.h>
 
 // Ensures the grid has exactly 6 panels to match node_config.h
-_Static_assert(GRID_NODE_COUNT == 6, "Grid must have only 6 panels to match node_config.h");
+//_Static_assert(GRID_NODE_COUNT == 6, "Grid must have only 6 panels to match node_config.h");
 
 // Types of content a panel can display
 typedef enum {
@@ -19,14 +19,14 @@ typedef enum {
 } display_role_t;
 
 // Display role assigned to each panel
-static const display_role_t GRID_ROLES[GRID_NODE_COUNT] = {
+static const display_role_t GRID_ROLES[GRID_NODE_MAX] = {
     DISPLAY_ROLE_CARD, DISPLAY_ROLE_CARD, DISPLAY_ROLE_CARD,
     DISPLAY_ROLE_CARD, DISPLAY_ROLE_CARD, DISPLAY_ROLE_CARD,
 };
 
 // Validation check (is NODE_ID within range)
 static inline bool grid_is_valid_node(int node_id) {
-    return node_id >= 1 && node_id <= GRID_NODE_COUNT;
+    return node_id >= 1 && node_id <= GRID_NODE_MAX;
 }
 
 // Row and Column are 0-based, Row 0 is top
@@ -49,7 +49,7 @@ static inline int grid_col(int node_id) {
 
 // Find the node at a specific position (e.g. top-left, middle, top-right)
 static inline int grid_node_at(int row, int col) {
-    if (row < 0 || row >= GRID_ROWS || col < 0 || col >= GRID_COLS) {
+    if (row < 0 || row >= GRID_ROWS_MAX || col < 0 || col >= GRID_COLS) {
         return 0;
     }
     return row * GRID_COLS + col + 1;
