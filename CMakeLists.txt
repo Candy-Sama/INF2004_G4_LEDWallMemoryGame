@@ -43,6 +43,8 @@ project(LED_MEMORY_GAME C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
+include(src/display/images.cmake)
+
 # Add executable. Default name is the project name, version 0.1
 
 if(RTOS_SMOKETEST)
@@ -51,11 +53,10 @@ else()
     set(APP_MAIN src/main.c)
 endif()
 
-
 add_executable(LED_MEMORY_GAME 
     ${APP_MAIN}
     src/display/ledmatrix.c
-    src/display/imagedata_bin.S
+    ${IMAGE_OUT}/imagedata_bin.S
     src/logic/game_logic.c
     src/network/mqtt_handler.c
     src/network/wifi_manager.c
@@ -66,6 +67,8 @@ add_executable(LED_MEMORY_GAME
     src/network/net.c
     src/sensors/sensor.c
 )
+
+add_dependencies(LED_MEMORY_GAME generate_images)
 
 pico_set_program_name(LED_MEMORY_GAME "LED_MEMORY_GAME")
 pico_set_program_version(LED_MEMORY_GAME "0.1")
@@ -86,6 +89,7 @@ target_include_directories(LED_MEMORY_GAME PRIVATE
                         src/sensors
                         src/layout
                         ${CMAKE_CURRENT_LIST_DIR}
+                        ${IMAGE_OUT}
                 )
 
 # Add any user requested libraries
