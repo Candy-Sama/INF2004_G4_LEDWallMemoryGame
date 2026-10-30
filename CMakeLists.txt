@@ -62,6 +62,7 @@ add_executable(LED_MEMORY_GAME
     src/network/wifi_manager.c
     src/sensors/imudriver.c
     src/layout/node_identity.c
+    src/layout/node_registry.c
     src/display/display.c
     src/logic/game_task.c
     src/network/net.c

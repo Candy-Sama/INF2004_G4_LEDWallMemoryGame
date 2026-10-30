@@ -16,6 +16,7 @@ else()
     set(CONVERTER_EXE ${CONVERTER_BIN}/convert)
 endif()
 
+
 file(GLOB IMAGE_PNGS CONFIGURE_DEPENDS ${CONVERTER_SRC}/images/*.png)
 list(SORT IMAGE_PNGS)
 file(MAKE_DIRECTORY ${IMAGE_OUT}/images_bin)
