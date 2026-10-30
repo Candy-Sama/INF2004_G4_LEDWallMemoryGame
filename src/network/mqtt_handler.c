@@ -233,7 +233,7 @@ bool mqtt_configure_will(const char *topic, const char *payload, uint16_t keep_a
     if (!valid_topic(topic, false) || payload == NULL ||
         strlen(payload) > MQTT_PAYLOAD_MAX_LENGTH || keep_alive == 0) return false;
     cyw43_arch_lwip_begin();
-    bool accepted = !attempted;
+    bool accepted = !attempted || (!connection_pending && !(client && mqtt_client_is_connected(client)));
     if (accepted) {
         strcpy(will_topic, topic);
         strcpy(will_payload, payload);
@@ -291,7 +291,7 @@ bool mqtt_send_ex(const char *topic, const void *payload, size_t length,
         err_t result = mqtt_publish(client, topic, payload, (u16_t)length, qos, retain,
                                    completion ? completion : publish_cb, context);
         queued = result == ERR_OK;
-        if (!queued) printf("Could not queue publish: %d\n", result);
+        if (!queued) printf("Could not queue publish to %s: %d\n", topic, (int)result);;
     }
     cyw43_arch_lwip_end();
     return queued;

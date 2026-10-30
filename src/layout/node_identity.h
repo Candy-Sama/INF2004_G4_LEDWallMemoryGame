@@ -11,13 +11,20 @@
 bool identity_init(void);
 
 const char *identity_board_id(void);
-int identity_node_id(void); // node id 1-6 or 0 is unknown
+int identity_node_id(void); // node id 1-6 or 0 is unassigned
+bool identity_is_assigned(void);
 bool identity_is_master(void); // demo purpose: panel 1
+
+void identity_set_node_id(int node_id);
+bool identity_same_id(const char *a, const char *b);
 
 // This panel listens for commands (subscribe to it).
 const char *identity_command_topic(void);
 // This panel announces online/offline
 const char *identity_status_topic(void);
+
+const char *identity_assign_topic(void);
+bool identity_assign_topic_for(const char *board_id, char *out, size_t out_len);
 
 // Address of the target panel we send commands to (publish to it).
 // const char *identity_peer_command_topic(void);
