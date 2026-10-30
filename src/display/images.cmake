@@ -22,6 +22,8 @@ file(MAKE_DIRECTORY ${IMAGE_OUT}/images_bin)
 
 add_custom_command(
     OUTPUT  ${IMAGE_OUT}/imagedata.h ${IMAGE_OUT}/imagedata_bin.S
+    COMMAND ${CMAKE_COMMAND} -E remove_directory ${IMAGE_OUT}/images_bin
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${IMAGE_OUT}/images_bin
     COMMAND ${CONVERTER_EXE} ${IMAGE_OUT} ${IMAGE_PNGS}
     DEPENDS image_converter_host ${IMAGE_PNGS}
     COMMENT "Converting PNG images to 8x8 RGB data"
