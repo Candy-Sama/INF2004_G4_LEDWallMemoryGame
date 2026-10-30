@@ -51,7 +51,13 @@ add_executable(LED_MEMORY_GAME
     src/network/network_task.c
     src/network/wifi_manager.c
     src/sensors/imudriver.c
-    src/logic/game_logic.c
+    src/layout/node_identity.c
+    src/display/display.c
+    src/logic/game_task.c
+    src/network/net.c
+    src/sensors/sensor.c
+    src/logic/setup.c
+    src/sensors/buzzer.c
 )
 
 pico_set_program_name(LED_MEMORY_GAME "LED_MEMORY_GAME")
@@ -80,6 +86,9 @@ target_link_libraries(LED_MEMORY_GAME
     pico_cyw43_arch_lwip_sys_freertos
     pico_lwip_mqtt
     FreeRTOS-Kernel-Heap4
+    hardware_pwm
+
+
 )
 target_compile_definitions(LED_MEMORY_GAME PRIVATE ASYNC_CONTEXT_DEFAULT_FREERTOS_TASK_STACK_SIZE=1024)
 
