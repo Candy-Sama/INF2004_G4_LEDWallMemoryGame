@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 
+extern const uint8_t cloverCard_bin[192];
 extern const uint8_t diamondCard_bin[192];
 extern const uint8_t heartCard_bin[192];
 extern const uint8_t heartCardDark_bin[192];
@@ -13,5 +14,6 @@ extern const uint8_t Number3Card_bin[192];
 extern const uint8_t Number4Card_bin[192];
 extern const uint8_t Number5Card_bin[192];
 extern const uint8_t Number6Card_bin[192];
+extern const uint8_t spadeCard_bin[192];
 
 #endif

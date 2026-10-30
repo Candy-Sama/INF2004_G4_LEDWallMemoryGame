@@ -29,16 +29,16 @@
 static QueueHandle_t net_event_q;   // CHANGED: set in net_start() from the sensor module
 
 static void send_movement(void) {
-    static bool send_heart_next = true;
+    static bool send_clover_next = true;
     if (!is_wifi_connected() || !is_mqtt_connected()) {
         printf("Movement ignored: network is disconnected.\n");
         return;
     }
-    const char *card = send_heart_next ? "Heart" : "Dark Heart";
+    const char *card = send_clover_next ? "diamond" : "Clover";
     if (mqtt_send(identity_command_topic(), card, strlen(card))) {
         printf("Movement: queued %s to %s\n", card, identity_command_topic());
-        display_show_image(send_heart_next ? heartCard_bin : heartCardDark_bin);  // CHANGED
-        send_heart_next = !send_heart_next;
+        display_show_image(send_clover_next ? diamondCard_bin : cloverCard_bin);  // CHANGED
+        send_clover_next = !send_clover_next;
     } else {
         printf("Movement: publish failed; try again.\n");
     }
@@ -77,12 +77,12 @@ static void apply_received_command(void) {
         #endif
 
         if (strcmp(message.topic, identity_command_topic()) != 0) continue;
-        if (message.length == 5 && memcmp(message.payload, "Heart", 5) == 0) {
-            display_show_image(heartCard_bin);                       // CHANGED
-            printf("LED command applied: Heart\n");
-        } else if (message.length == 10 && memcmp(message.payload, "Dark Heart", 10) == 0) {
-            display_show_image(heartCardDark_bin);                   // CHANGED
-            printf("LED command applied: Dark Heart\n");
+        if (message.length == 7 && memcmp(message.payload, "diamond", 7) == 0) {
+            display_show_image(diamondCard_bin);                       // CHANGED
+            printf("LED command applied: Diamond\n");
+        } else if (message.length == 6 && memcmp(message.payload, "Clover", 6) == 0) {
+            display_show_image(cloverCard_bin);                   // CHANGED
+            printf("LED command applied: Clover\n");
         } else if (message.length == 3 && memcmp(message.payload, "OFF", 3) == 0) {
             display_show_colour(0, 0, 0);                            // CHANGED (was ledmatrix_fill)
             printf("LED command applied: OFF\n");
