@@ -30,7 +30,8 @@ on the same private test router; disable client isolation on that router.
    mosquitto_sub -h 192.168.1.50 -t 'se4/memorygame/#' -q 1 -v
    ```
 
-5. Rebuild and flash a distinct NODE_ID for each board. The FreeRTOS demo starts automatically; open USB serial to observe it. Look for its command-topic subscription and retained online status.
+5. Rebuild and flash a distinct NODE_ID for each board. Open USB serial to start
+   this demo. Look for its command-topic subscription and retained online status.
 6. Send a command to Node 2 (no `-r`: commands should not be retained):
 
    ```powershell
@@ -41,7 +42,7 @@ on the same private test router; disable client isolation on that router.
    values, even though it subscribed after those publications.
 8. Unplug one Pico. After broker loss detection, its status should become
    `offline`. Expect seconds, not 200 ms; the demo keepalive is 10 seconds.
-   Reconnect it: online should replace offline. The demo
+   Reconnect it and reopen serial: online should replace offline. The demo
    does not yet pause a game or perform the v1 state handshake.
 
 Rebuilding overwrites `build/LED_MEMORY_GAME.uf2`; old named UF2 snapshots are

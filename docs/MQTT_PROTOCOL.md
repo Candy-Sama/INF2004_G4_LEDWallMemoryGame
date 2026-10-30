@@ -32,9 +32,9 @@ flowchart LR
 ```
 
 Controller and grid services are logical roles; they can run on panel nodes.
-Team decision still needed: which boards host them. The intended hardware is two masters and four slaves, with all six boards
-remaining selectable card panels and no dedicated scoreboard. The two master
-responsibilities still need an explicit split; only one owns game state.
+Team decision still needed: which boards host them. Six selectable panels are
+required for three pairs. A dedicated scoreboard replacing a card would leave
+too few cards unless more hardware is added. There is only one game authority.
 
 Use a stable hardware-derived node ID (for example Pico board unique ID), never
 its current grid position, as its MQTT identity. `p01` below is an example ID.
@@ -153,12 +153,10 @@ only record a flag or notify a task; never render, block, or re-enter MQTT APIs.
 No callback is guaranteed after connection loss. Resolve uncertain delivery via
 application synchronisation. The old send/subscribe APIs remain QoS 0 wrappers.
 
-Current `main.c` remains a colour-and-tap demo using legacy topics. The Network
-Task registers a retained `offline` Last Will and publishes retained `online`
-status on `se4/memorygame/nodeN/status`. The application queues
-`TAP DETECTED` on `se4/memorygame/nodeN/tap` at QoS 1 without retaining it.
-Command messages are received but not yet handled. These demo messages do not
-implement the v1 JSON game protocol.
+Current `main.c` remains the two-board colour demo using legacy topics. It now
+registers retained `offline` Last Will and publishes retained `online` status on
+`se4/memorygame/nodeN/status`; it does not implement the v1 JSON game protocol.
+All other existing demo commands remain unretained QoS 0.
 
 ## 7. FreeRTOS integration contract
 
@@ -172,13 +170,15 @@ flowchart LR
     D -->|AppliedQueue| N
 ```
 
-Current firmware uses FreeRTOS with `pico_cyw43_arch_lwip_sys_freertos`,
-`NO_SYS=0`, one Network Task and a separate Application Task. Wi-Fi initialises
-inside the running Network Task. Public application calls queue copied messages
-through `network_publish()` and `network_receive()`; see [FREERTOS.md](FREERTOS.md).
-SDK service tasks still exist below the owner. Sensor/display remain together in
-the demo Application Task; dedicated game/sensor/display queues are team
-integration work. Priorities and queue sizes require hardware measurement.
+Current firmware still uses `pico_cyw43_arch_lwip_threadsafe_background` and a
+main loop. Full migration requires FreeRTOS kernel/config, starting the scheduler
+before network initialisation, `pico_cyw43_arch_lwip_sys_freertos`, compatible
+lwIP `NO_SYS=0` configuration, and replacing the main loop with owning tasks.
+No FreeRTOS dependency is present in this repository yet. Do not just rename
+the linked library and claim RTOS support. All public MQTT calls then belong in
+one Network Task; other tasks use bounded queues. lwIP callbacks still use the
+network lock. Use short periodic sensor work that blocks between samples.
+Task priorities and queue sizes must be agreed and measured during integration.
 
 ## 8. Validation and remaining work
 
@@ -189,8 +189,7 @@ callback forwarding, receive overflow and subscription restoration.
 
 Still to implement with owners: JSON parsing/validation, stable boot/game IDs,
 heartbeat monitoring, assignment registry, duplicate filtering, state/applied
-handshake, game routing and dedicated sensor/display tasks. Wi-Fi rejoin attempts and
-the generic FreeRTOS queues/tasks are implemented but need hardware validation. These are not provided by
+handshake, Wi-Fi rejoin and the FreeRTOS queues/tasks. These are not provided by
 the generic transport. Local broker address and physical controller role remain
 deployment/team settings.
 

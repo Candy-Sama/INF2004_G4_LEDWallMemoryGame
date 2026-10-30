@@ -30,7 +30,7 @@ static bool subscription_pending;
 static bool subscription_retry_wait;
 static u32_t subscription_failed_ms;
 
-// lwIP callback producer / Network Task consumer. All accesses use the lwIP lock.
+// Callback producer / main-loop consumer. All accesses use the lwIP lock.
 static mqtt_message_t rx_queue[MQTT_RX_QUEUE_CAPACITY];
 static size_t rx_head, rx_count;
 static mqtt_message_t incoming;
@@ -38,7 +38,11 @@ static size_t incoming_used;
 static bool incoming_valid;
 static uint32_t dropped_messages;
 
-//checks to see if this is a valid topic or filter. If filter is true, then the topic can contain wildcards.
+
+//Reconnection
+static uintptr_t dns_generation;
+static const char *pending_client_id;
+
 static bool valid_topic(const char *topic, bool filter) {
     if (topic == NULL) return false;
     size_t length = strlen(topic);
@@ -63,7 +67,6 @@ static void enqueue_incoming(void) {
     incoming_valid = false;
 }
 
-// Callback for incoming publish messages. Called from lwIP's TCP thread.
 static void incoming_publish_cb(void *arg, const char *topic, u32_t total_length) {
     (void)arg;
     if (incoming_valid) ++dropped_messages;
@@ -80,7 +83,6 @@ static void incoming_publish_cb(void *arg, const char *topic, u32_t total_length
     if (total_length == 0) enqueue_incoming();
 }
 
-// Callback for incoming data. Called from lwIP's TCP thread.
 static void incoming_data_cb(void *arg, const u8_t *data, u16_t length, u8_t flags) {
     (void)arg;
     if (!incoming_valid) return;
@@ -101,7 +103,6 @@ static void incoming_data_cb(void *arg, const u8_t *data, u16_t length, u8_t fla
     }
 }
 
-// Callback for subscription status changes. Called from lwIP's TCP thread.
 static void subscription_cb(void *arg, err_t result) {
     subscription_t *subscription = arg;
     subscription_pending = false;
@@ -115,7 +116,6 @@ static void subscription_cb(void *arg, err_t result) {
     }
 }
 
-// Service subscriptions, one at a time. This is called with the lwIP lock held.
 static void service_subscriptions(void) {
     if (subscription_pending) return;
     if (subscription_retry_wait &&
@@ -137,7 +137,6 @@ static void service_subscriptions(void) {
     }
 }
 
-// Callback for MQTT connection status changes. Called from lwIP's TCP thread.
 static void mqtt_connection_cb(mqtt_client_t *mqtt, void *arg, mqtt_connection_status_t status) {
     (void)arg;
     connection_pending = false;
@@ -158,7 +157,6 @@ static void mqtt_connection_cb(mqtt_client_t *mqtt, void *arg, mqtt_connection_s
     }
 }
 
-// Connect after DNS resolves, either in the Network Task or DNS callback; locked.
 static void connect_to_broker(const ip_addr_t *address, const char *client_id) {
     client_info.client_id = client_id;
     client_info.keep_alive = keep_alive_seconds;
@@ -171,17 +169,24 @@ static void connect_to_broker(const ip_addr_t *address, const char *client_id) {
     }
 }
 
-// Callback for DNS resolution. Called from lwIP's TCP thread.
-static void dns_found_cb(const char *name, const ip_addr_t *address, void *arg) {
+static void dns_found_cb(
+    const char *name,
+    const ip_addr_t *address,
+    void *arg
+    ) 
+{
+    if ((uintptr_t)arg != dns_generation || !connection_pending) {
+        return; // Ignore an old or cancelled lookup.
+    }
+
     if (address != NULL) {
-        connect_to_broker(address, (const char *)arg);
+        connect_to_broker(address, pending_client_id);
     } else {
         connection_pending = false;
         printf("DNS resolution failed for %s\n", name);
     }
 }
 
-// Service the MQTT connection, including DNS resolution and connection attempts. Called by the Network Task with the lwIP lock held.
 static void service_connection(const char *client_id) {
     if (client && mqtt_client_is_connected(client)) {
         service_subscriptions();
@@ -198,7 +203,17 @@ static void service_connection(const char *client_id) {
     }
     connection_pending = true;
     ip_addr_t address;
-    err_t result = dns_gethostbyname(MQTT_BROKER_HOST, &address, dns_found_cb, (void *)client_id);
+    //reconnection
+    pending_client_id = client_id;
+    ++dns_generation;
+
+    err_t result = dns_gethostbyname(
+        MQTT_BROKER_HOST,
+        &address,
+        dns_found_cb,
+        (void *)dns_generation
+    );
+
     if (result == ERR_OK) {
         connect_to_broker(&address, client_id);
     } else if (result != ERR_INPROGRESS) {
@@ -207,7 +222,6 @@ static void service_connection(const char *client_id) {
     }
 }
 
-// Network Task entry point: take the lwIP lock before servicing the client.
 void init_mqtt_client(const char *client_id) {
     if (client_id == NULL || client_id[0] == '\0') return;
     cyw43_arch_lwip_begin();
@@ -215,13 +229,11 @@ void init_mqtt_client(const char *client_id) {
     cyw43_arch_lwip_end();
 }
 
-// Save the broker's disconnect announcement before the first connection attempt.
-// The public function acquires its own lwIP lock.
 bool mqtt_configure_will(const char *topic, const char *payload, uint16_t keep_alive) {
     if (!valid_topic(topic, false) || payload == NULL ||
         strlen(payload) > MQTT_PAYLOAD_MAX_LENGTH || keep_alive == 0) return false;
     cyw43_arch_lwip_begin();
-    bool accepted = !attempted;
+    bool accepted = !attempted || (!connection_pending && !(client && mqtt_client_is_connected(client)));
     if (accepted) {
         strcpy(will_topic, topic);
         strcpy(will_payload, payload);
@@ -235,13 +247,10 @@ bool mqtt_configure_will(const char *topic, const char *payload, uint16_t keep_a
     return accepted;
 }
 
-// Compatibility wrapper: register a filter at QoS 0.
 bool mqtt_subscribe_topic(const char *topic) {
     return mqtt_subscribe_topic_qos(topic, 0);
 }
 
-// Copy a filter into the local registry. Broker acknowledgement happens later;
-// registration success does not yet mean the subscription is active.
 bool mqtt_subscribe_topic_qos(const char *topic, uint8_t qos) {
     if (!valid_topic(topic, true) || qos > 1) return false;
     cyw43_arch_lwip_begin();
@@ -282,7 +291,7 @@ bool mqtt_send_ex(const char *topic, const void *payload, size_t length,
         err_t result = mqtt_publish(client, topic, payload, (u16_t)length, qos, retain,
                                    completion ? completion : publish_cb, context);
         queued = result == ERR_OK;
-        if (!queued) printf("Could not queue publish: %d\n", result);
+        if (!queued) printf("Could not queue publish to %s: %d\n", topic, (int)result);;
     }
     cyw43_arch_lwip_end();
     return queued;
@@ -321,4 +330,36 @@ bool mqtt_is_ready(void) {
     for (size_t i = 0; i < subscription_count; ++i) ready = ready && subscriptions[i].active;
     cyw43_arch_lwip_end();
     return ready;
+}
+
+// Reconnection Protocol
+void mqtt_reset_connection(void) {
+    cyw43_arch_lwip_begin(); //Locks the nextworking
+
+    ++dns_generation; // Invalidate any outstanding DNS result.
+    
+    if (client != NULL) { //if have a connection, remove
+        mqtt_disconnect(client);
+    }
+
+    //Clears the flags
+    connection_pending = false;
+    subscription_pending = false;
+    subscription_retry_wait = false;
+
+    //Mark all the saves subscriptions as inactive so can make it active later
+    for (size_t i = 0; i < subscription_count; ++i) {
+        subscriptions[i].active = false;
+    }
+
+    //Discard all the old messages
+    dropped_messages += (uint32_t)rx_count + (incoming_valid ? 1u : 0u);
+
+    incoming_valid = false;
+    rx_head = 0;
+    rx_count = 0;
+
+    last_attempt_ms = sys_now();
+
+    cyw43_arch_lwip_end();
 }

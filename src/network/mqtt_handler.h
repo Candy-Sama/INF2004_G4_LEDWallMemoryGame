@@ -26,8 +26,8 @@ typedef struct {
     size_t length;
 } mqtt_message_t;
 
-// Low-level APIs: only the Network Task calls these after Wi-Fi architecture
-// initialisation. Other tasks use network_task.h and its copied queues.
+// Call these APIs from one owner (currently the main loop) after Wi-Fi
+// architecture initialisation; future RTOS callers must use one Network Task.
 // They handle network locking internally. The supplied client_id must stay valid.
 // Call repeatedly while Wi-Fi is up to service connection/subscription retries.
 void init_mqtt_client(const char *client_id);
@@ -57,5 +57,8 @@ bool mqtt_send_ex(const char *topic, const void *payload, size_t length,
 // game events. The discard counter includes these losses and is cumulative.
 bool mqtt_receive(mqtt_message_t *message);
 uint32_t mqtt_received_drop_count(void);
+
+//For reconnecting
+void mqtt_reset_connection(void);
 
 #endif

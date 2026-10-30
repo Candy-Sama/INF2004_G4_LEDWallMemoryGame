@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.13)
+project(image_converter C)
+add_executable(convert convert.c)
+if(NOT MSVC)
+    target_link_libraries(convert m)
+endif()

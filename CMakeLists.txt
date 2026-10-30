@@ -28,27 +28,37 @@ set(PICO_BOARD pico_w CACHE STRING "Board type")
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
 
+# FreeRTOS kernel (git submodule in lib/FreeRTOS-Kernel). Must come after
+# pico_sdk_import.cmake and before project().
+set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/FreeRTOS-Kernel)
+include(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/FreeRTOS_Kernel_import.cmake)
+ 
+# Step-1 verification: configure with -DRTOS_SMOKETEST=ON to build the tiny
+# blink/queue test instead of the real application.
+option(RTOS_SMOKETEST "Build FreeRTOS smoke test instead of main.c" OFF)
+
+
 project(LED_MEMORY_GAME C CXX ASM)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-# FreeRTOS is kept outside version control; callers may provide another install.
-set(FREERTOS_KERNEL_PATH
-    "${CMAKE_CURRENT_LIST_DIR}/lib/FreeRTOS-Kernel"
-    CACHE PATH "Path to the FreeRTOS Kernel")
-set(FREERTOS_CONFIG_FILE_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/config")
-include("${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/FreeRTOS_Kernel_import.cmake")
+include(src/display/images.cmake)
 
 # Add executable. Default name is the project name, version 0.1
+
+if(RTOS_SMOKETEST)
+    set(APP_MAIN src/main_rtos_smoketest.c)
+else()
+    set(APP_MAIN src/main.c)
+endif()
+
 add_executable(LED_MEMORY_GAME 
-    src/main.c
+    ${APP_MAIN}
     src/display/ledmatrix.c
-    src/display/imagedata_bin.S
-    src/gameengine/core.c
-    src/gameengine/memory.c
+    ${IMAGE_OUT}/imagedata_bin.S
+    src/logic/game_logic.c
     src/network/mqtt_handler.c
-    src/network/network_task.c
     src/network/wifi_manager.c
     src/sensors/imudriver.c
     src/layout/node_identity.c
@@ -60,21 +70,28 @@ add_executable(LED_MEMORY_GAME
     src/sensors/buzzer.c
 )
 
+add_dependencies(LED_MEMORY_GAME generate_images)
+
 pico_set_program_name(LED_MEMORY_GAME "LED_MEMORY_GAME")
 pico_set_program_version(LED_MEMORY_GAME "0.1")
 
 # Generate PIO header
 pico_generate_pio_header(LED_MEMORY_GAME ${CMAKE_CURRENT_LIST_DIR}/src/display/ws2812.pio)
 
+# Modify the below lines to enable/disable output over UART/USB
+pico_enable_stdio_uart(LED_MEMORY_GAME 0)
+pico_enable_stdio_usb(LED_MEMORY_GAME 1)
+
 # Add the standard include files to the build
 target_include_directories(LED_MEMORY_GAME PRIVATE
                         config
                         src/display
-                        src/gameengine
+                        src/logic
                         src/network
                         src/sensors
-                        src/logic
+                        src/layout
                         ${CMAKE_CURRENT_LIST_DIR}
+                        ${IMAGE_OUT}
                 )
 
 # Add any user requested libraries
@@ -85,31 +102,11 @@ target_link_libraries(LED_MEMORY_GAME
     pico_unique_id
     pico_cyw43_arch_lwip_sys_freertos
     pico_lwip_mqtt
+    FreeRTOS-Kernel
     FreeRTOS-Kernel-Heap4
     hardware_pwm
 
 
 )
-target_compile_definitions(LED_MEMORY_GAME PRIVATE ASYNC_CONTEXT_DEFAULT_FREERTOS_TASK_STACK_SIZE=1024)
 
 pico_add_extra_outputs(LED_MEMORY_GAME)
-
-# Modify the below lines to enable/disable output over UART/USB
-# (As discussed, USB is enabled so your prints don't clash with the IMU on I2C pins)
-pico_enable_stdio_usb(LED_MEMORY_GAME 1)
-pico_enable_stdio_uart(LED_MEMORY_GAME 0)
-
-# == THIS IS TO TEST THE DISPLAY  ======================================================
-add_executable(display_test
-src/display/display_test.c
-src/display/ledmatrix.c
-src/display/imagedata_bin.S
-)
-target_include_directories(display_test PRIVATE src/display)
-target_link_libraries(display_test pico_stdlib hardware_pio hardware_dma)
-pico_generate_pio_header(display_test ${CMAKE_CURRENT_LIST_DIR}/src/display/ws2812.pio)
-pico_add_extra_outputs(display_test)
-pico_enable_stdio_usb(display_test 1)
-pico_enable_stdio_uart(display_test 0)
-
-# ====================================================================================
