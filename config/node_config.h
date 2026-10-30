@@ -51,4 +51,6 @@
 
 #define MQTT_ORIENTATION_TOPIC MQTT_TOPIC_ROOT "/orientation"
 
+#define MQTT_JOIN_TOPIC        MQTT_TOPIC_ROOT "/join"
+
 #endif
