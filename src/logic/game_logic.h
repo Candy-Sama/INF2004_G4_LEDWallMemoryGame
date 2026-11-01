@@ -62,6 +62,7 @@ bool game_shared_init(GameShared* g);
 bool game_shared_process_input(GameShared* g, uint8_t panel_id);
 bool game_shared_evaluate(GameShared* g);
 bool game_shared_snapshot(GameShared* g, GameManager* out);
+bool game_shared_restart(GameShared* g);
 void game_shared_set_online(GameShared* g, uint8_t node, bool online);
 
 // Wire format (2 bytes)

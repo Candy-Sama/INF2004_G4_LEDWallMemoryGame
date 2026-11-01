@@ -1,10 +1,9 @@
-// game_task.h
 #pragma once
 #include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
 #include "node_identity.h"
-#define IS_GAME_MASTER (identity_is_master())
-bool game_start(void);
-void game_handle_tap_payload(const uint8_t *payload, size_t len);   // called by net_task
-void game_publish_output(void);                                      // called by net_task
+
+#define GAME_ENGINE_NODE 1
+#define IS_GAME_MASTER   (identity_node_id() == GAME_ENGINE_NODE)
+
+bool game_start(void);   // registers its own net handlers
+void game_begin(void);   // called when START arrives

@@ -62,11 +62,14 @@ add_executable(LED_MEMORY_GAME
     src/network/wifi_manager.c
     src/sensors/imudriver.c
     src/layout/node_identity.c
-    src/layout/node_registry.c
     src/display/display.c
     src/logic/game_task.c
     src/network/net.c
     src/sensors/sensor.c
+    src/logic/setup.c
+    src/sensors/buzzer.c
+    src/layout/node_identity.c
+    src/layout/node_registry.c
 )
 
 add_dependencies(LED_MEMORY_GAME generate_images)
@@ -103,6 +106,7 @@ target_link_libraries(LED_MEMORY_GAME
     pico_lwip_mqtt
     FreeRTOS-Kernel
     FreeRTOS-Kernel-Heap4
+    hardware_pwm
 
 
 )

@@ -8,7 +8,7 @@
 //#define PEER_NODE_ID 2
 
 // Desk movement demo: only node 1 sends commands to PEER_NODE_ID.
-#define ENABLE_MOTION_TEST 1
+#define ENABLE_MOTION_TEST 0
 #define IMU_LOG_READINGS 0  // Set to 1 to print X/Y/Z twice a second.
 #define MOTION_THRESHOLD_MG 250
 #define MOTION_RELEASE_MG 80
@@ -16,7 +16,7 @@
 #define MOTION_COOLDOWN_MS 800
  
 // Orientation (accelerometer gravity vector, see src/sensors/orientation.h)
-#define ENABLE_AUTO_ROTATE 1        // 1 = rotate card images to stay upright
+#define ENABLE_AUTO_ROTATE 0       // 1 = rotate card images to stay upright
 #define ORIENT_SENSOR_OFFSET 0      // 0..3 clockwise quarter turns if the GY-511 is
                                     // mounted rotated relative to the LED panel
 #define ORIENT_SETTLE_MS 300        // must hold a new pose this long to be accepted
