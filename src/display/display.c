@@ -10,7 +10,7 @@
 #include "ledmatrix.h"
 #include "imagedata.h"
 
-#define DISPLAY_TASK_PRIORITY 2
+#define DISPLAY_TASK_PRIORITY 4
 #define DISPLAY_TASK_STACK    512
 
 typedef struct { const uint8_t *image; uint8_t r, g, b; bool refresh; } display_cmd_t;
@@ -69,6 +69,17 @@ static void display_task(void *arg) {
         if (!have_cmd) {
             continue;
         }
+
+        if (cmd.image) {
+            taskENTER_CRITICAL();
+            show_image_rgb_rotated(cmd.image, s_rotation);
+            taskEXIT_CRITICAL();
+        } else {
+            taskENTER_CRITICAL();
+            ledmatrix_fill(cmd.r, cmd.g, cmd.b);
+            taskEXIT_CRITICAL();
+        }
+        
         if (cmd.image) {
             show_image_rgb_rotated(cmd.image, s_rotation);
         } else {

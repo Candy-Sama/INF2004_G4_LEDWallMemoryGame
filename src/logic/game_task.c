@@ -7,6 +7,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#include "buzzer.h"
 
 #define GAME_TASK_PRIORITY      3
 #define GAME_TASK_STACK         1024
@@ -98,10 +99,23 @@ static void game_task(void *arg) {
 
         // 4. Handle matches and restarts
         if (snap.current_state == STATE_EVALUATE_MATCH) {
-            // Wait 1 second so the players can see both cards before flipping them back over
-            vTaskDelay(pdMS_TO_TICKS(1000));
+            
+            // Check if the two selected cards match
+            uint8_t card1 = get_card_at_panel(&snap, snap.first_selection);
+            uint8_t card2 = get_card_at_panel(&snap, snap.second_selection);
+            
+            if (card1 == card2) {
+                buzzer_play(BUZZ_JINGLE); // Match: play good jingle
+            } else {
+                buzzer_play(BUZZ_WRONG);  // Mismatch: play bad jingle before turning OFF
+            }
+
+            // Wait 1 second so the players can see both cards before they flip back
+            vTaskDelay(pdMS_TO_TICKS(1000));          // lock NOT held
             game_shared_evaluate(&game);
             xQueueReset(tap_q);
+            
+        } else if (snap.current_state == STATE_GAME_WON) {
         } else if (snap.current_state == STATE_GAME_WON) {
             vTaskDelay(pdMS_TO_TICKS(GAME_RESTART_DELAY_MS));
             game_shared_restart(&game);
