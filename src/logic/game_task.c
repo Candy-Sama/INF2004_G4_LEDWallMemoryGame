@@ -10,8 +10,8 @@
 
 #define GAME_TASK_PRIORITY      3
 #define GAME_TASK_STACK         1024
-#define GAME_TEST_FORCE_ONLINE  0   // 1 = skip presence check (testing only)
-#define GAME_TEST_AUTOSTART     0   // 1 = skip waiting for START (testing only)
+#define GAME_TEST_FORCE_ONLINE  1   // 1 = skip presence check (testing only)
+#define GAME_TEST_AUTOSTART     1   // 1 = skip waiting for START (testing only)
 #define GAME_RESTART_DELAY_MS   5000
 
 static GameShared        game;
@@ -47,35 +47,66 @@ static void on_status(const char *topic, const uint8_t *p, size_t len) {
 static void game_task(void *arg) {
     (void)arg;
     tap_evt_t evt;
-    uint8_t last_state[2] = {0xFF, 0xFF};
+    
+    // Track what is currently showing on each screen so we only send updates when things change
+    uint8_t last_panel_display[NUM_PANELS];
+    memset(last_panel_display, 0xFF, sizeof(last_panel_display));
 
     for (;;) {
+        // 1. Process incoming taps
         if (xQueueReceive(tap_q, &evt, pdMS_TO_TICKS(250)) == pdTRUE) {
             game_shared_process_input(&game, evt.panel_id);
         }
 
+        // 2. Take a snapshot of the current rules/state
         GameManager snap;
         if (!game_shared_snapshot(&game, &snap)) continue;
 
-        uint8_t state[2];
-        game_pack_state(&snap, state);
-        if (memcmp(last_state, state, 2) != 0) {
-            memcpy(last_state, state, 2);
-            net_publish(MQTT_STATE_TOPIC, state, 2, true);
-        }
+        // 3. TRANSLATOR LOOP: Tell each panel what to draw based on the game rules
+        for (uint8_t i = 0; i < NUM_PANELS; i++) {
+            // A card should be visible if it's permanently matched, OR if it's currently selected
+            bool is_revealed = (snap.matched_bitmask & (1 << i)) || 
+                               (snap.first_selection == i) || 
+                               (snap.second_selection == i);
+            
+            // 0xFF means face-down/OFF. The pairs are 0, 1, and 2.
+            uint8_t desired_display = 0xFF; 
+            if (is_revealed) {
+                desired_display = get_card_at_panel(&snap, i); 
+            }
 
+            // If the screen needs to change, send the MQTT command
+            if (desired_display != last_panel_display[i]) {
+                last_panel_display[i] = desired_display;
+                
+                char target_topic[64];
+                snprintf(target_topic, sizeof(target_topic), "%s/node%d/command", MQTT_TOPIC_ROOT, i + 1);
+                
+                const char* payload = "OFF";
+                if (desired_display == 0) {
+                    payload = "diamond";
+                } else if (desired_display == 1) {
+                    payload = "Clover";
+                } else if (desired_display == 2) {
+                    payload = "diamond"; // TEMP FIX: Reusing Diamond for Pair 3 until you add a 3rd image!
+                }
+                
+                net_publish(target_topic, payload, strlen(payload), false);
+            }
+        } 
+            
+
+        // 4. Handle matches and restarts
         if (snap.current_state == STATE_EVALUATE_MATCH) {
-            uint8_t rev = (snap.first_selection & 7) | ((snap.second_selection & 7) << 3);
-            net_publish(MQTT_REVEAL_TOPIC, &rev, 1, false);
-
-            vTaskDelay(pdMS_TO_TICKS(1000));          // lock NOT held
+            // Wait 1 second so the players can see both cards before flipping them back over
+            vTaskDelay(pdMS_TO_TICKS(1000));
             game_shared_evaluate(&game);
             xQueueReset(tap_q);
         } else if (snap.current_state == STATE_GAME_WON) {
             vTaskDelay(pdMS_TO_TICKS(GAME_RESTART_DELAY_MS));
             game_shared_restart(&game);
             xQueueReset(tap_q);
-            last_state[0] = last_state[1] = 0xFF;
+            memset(last_panel_display, 0xFF, sizeof(last_panel_display)); // Reset tracking array
             printf("Game restarted.\n");
         }
     }

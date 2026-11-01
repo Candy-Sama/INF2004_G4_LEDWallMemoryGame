@@ -17,6 +17,7 @@
 #include "imagedata.h"
 #include "display.h"
 #include "sensor.h"
+#include "game_logic.h"
 #include "imu_orientation.h"
 #include "node_registry.h"
 
@@ -106,18 +107,22 @@ static void drain_publish_queue(void) {
 /* ------------------------------------------------------------ existing code */
 
 static void send_movement(void) {
-    static bool send_clover_next = true;
-    if (!is_wifi_connected() || !is_mqtt_connected()) {
-        printf("Movement ignored: network is disconnected.\n");
-        return;
-    }
-    const char *card = send_clover_next ? "diamond" : "Clover";
-    if (mqtt_send(identity_command_topic(), card, strlen(card))) {
-        printf("Movement: queued %s to %s\n", card, identity_command_topic());
-        display_show_image(send_clover_next ? diamondCard_bin : cloverCard_bin);
-        send_clover_next = !send_clover_next;
+    static uint32_t last_send_ms = 0;
+    
+    if (!is_wifi_connected() || !is_mqtt_connected()) return;
+
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    
+    // Hardware debounce: Ignores rapid physical vibrations under 1.5 seconds
+    if (last_send_ms != 0 && (now_ms - last_send_ms) < 1500) return;
+
+    // Send the raw tap event to the Game Master
+    uint8_t payload = identity_node_id();
+    if (net_publish(MQTT_TAP_TOPIC, &payload, 1, false)) {
+        last_send_ms = now_ms;
+        printf("[%lu ms] Movement: Tap sent to Game Master\n", (unsigned long)now_ms);
     } else {
-        printf("Movement: publish failed; try again.\n");
+        printf("Movement: publish failed\n");
     }
 }
 

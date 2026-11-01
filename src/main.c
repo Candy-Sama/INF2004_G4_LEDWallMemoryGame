@@ -10,6 +10,8 @@
 #include "sensor.h"
 #include "net.h"
 #include "game_task.h"
+#include "buzzer.h"
+#include "setup.h"
 
 #ifndef WAIT_FOR_USB
 #define WAIT_FOR_USB 0
@@ -59,6 +61,9 @@ int main(void) {
 
     if (!display_start()) { printf("display failed\n"); for (;;) {} }
     if (assigned && IS_GAME_MASTER && !game_start()) { printf("game failed\n"); for (;;) {} }
+
+    if (!buzzer_start()) { printf("buzzer failed\n"); for (;;) {} }     
+    if (assigned && !setup_start()) { printf("setup failed\n"); for (;;) {} }  
 
     if (!sensor_start()) { printf("sensor failed\n"); for (;;) {} }   // before net_start()
     if (!net_start())    { printf("net failed\n");    for (;;) {} }

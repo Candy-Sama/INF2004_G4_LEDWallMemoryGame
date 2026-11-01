@@ -98,7 +98,7 @@ static void sensor_task(void *arg) {
             bool moved = motion_detector_update(&detector, sample.x_mg, sample.y_mg,
                                                 sample.z_mg,
                                                 to_ms_since_boot(get_absolute_time()));
-            if (moved && ENABLE_MOTION_TEST) {
+            if (moved) {
                 app_event_t evt = APP_EVT_MOTION;
                 xQueueSend(sensor_event_q, &evt, 0);
             }
