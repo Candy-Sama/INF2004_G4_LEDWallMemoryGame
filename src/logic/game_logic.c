@@ -127,6 +127,17 @@ bool game_shared_snapshot(GameShared* g, GameManager* out) {
     return true;
 }
 
+bool game_shared_restart(GameShared* g) {
+    if (xSemaphoreTake(g->lock, LOCK_TIMEOUT) != pdTRUE) return false;
+    game_init(&g->state);
+    if (g->online_mask != ALL_ONLINE) {              // stay paused if someone is missing
+        g->state.paused_from   = STATE_WAIT_FIRST_CARD;
+        g->state.current_state = STATE_PAUSED_DISCONNECT;
+    }
+    xSemaphoreGive(g->lock);
+    return true;
+}
+
 void game_shared_set_online(GameShared* g, uint8_t node, bool online) {
     if (node >= NUM_PANELS) return;
     if (xSemaphoreTake(g->lock, LOCK_TIMEOUT) != pdTRUE) return;
