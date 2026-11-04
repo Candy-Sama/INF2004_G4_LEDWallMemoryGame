@@ -20,17 +20,26 @@ typedef struct { uint8_t op, arg; } setup_msg_t;
 
 static QueueHandle_t order_q;
 
-// Farhah provides the real one in display.c. This fallback keeps the build working.
-__attribute__((weak)) void display_show_start_slice(void) { display_show_colour(0, 12, 0); }
+// // Farhah provides the real one in display.c. This fallback keeps the build working.
+// __attribute__((weak)) void display_show_start_slice(void) { display_show_colour(0, 12, 0); }
 
 static void run_action(const setup_msg_t *m) {
     if (m->op == SETUP_OP_WRONG && m->arg == identity_node_id()) {
         buzzer_play(BUZZ_WRONG);
         printf("Setup: wrong position, beep\n");
+    } else if (m->op == SETUP_OP_ARRANGE) {
+        display_set_slot(0xFF);
+        display_show_colour(0, 0, 5);
+        printf("Setup: arrange, tap the panels in order\n");
+    } else if (m->op == SETUP_OP_SLOT) {
+        if ((m->arg & 0x0F) == identity_node_id()) {
+            display_set_slot(m->arg >> 4);
+            display_show_colour(0, 5, 0);
+            printf("Setup: slot %d\n", m->arg >> 4);
+        }
     } else if (m->op == SETUP_OP_START) {
         buzzer_play(BUZZ_JINGLE);
         display_show_start_slice();
-        if (IS_GAME_MASTER) game_begin();
         printf("Setup: START\n");
     }
 }

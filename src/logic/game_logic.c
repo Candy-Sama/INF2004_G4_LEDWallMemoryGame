@@ -38,8 +38,8 @@ void game_shuffle_board(GameManager* game) {
     game->board_p0 = deck[0];   // node 1
     game->board_p1 = deck[1];   // node 2
     game->board_p2 = deck[2];   // node 3
-    game->board_p3 = 3;         // node 4, unused in this test
-    game->board_p4 = deck[3];   // node 5
+    game->board_p3 = deck[3];   // node 4
+    game->board_p4 = 3;         // node 5, unused in this test
     game->board_p5 = 3;         // node 6, unused in this test
 }
 

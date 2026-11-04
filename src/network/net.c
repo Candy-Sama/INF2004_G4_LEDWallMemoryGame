@@ -241,6 +241,9 @@ static void apply_received_command(void) {
         } else if (message.length == 6 && memcmp(message.payload, "Clover", 6) == 0) {
             display_show_image(cloverCard_bin);
             printf("LED command applied: Clover\n");
+        } else if (message.length == 5 && memcmp(message.payload, "spade", 5) == 0) {
+            display_show_image(spadeCard_bin);
+            printf("LED command applied: Spade\n");
         } else if (message.length == 3 && memcmp(message.payload, "OFF", 3) == 0) {
             display_show_colour(0, 0, 0);
             printf("LED command applied: OFF\n");
