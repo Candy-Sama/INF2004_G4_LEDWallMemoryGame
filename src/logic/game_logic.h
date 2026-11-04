@@ -8,7 +8,7 @@
 #include "semphr.h"
 
 #define NUM_PANELS   6
-#define NUM_PAIRS    3
+#define NUM_PAIRS   2 //3
 #define NO_SELECTION 7 // Used instead of -1 for 3-bit unsigned fields
 #define ALL_ONLINE   0x3F
 

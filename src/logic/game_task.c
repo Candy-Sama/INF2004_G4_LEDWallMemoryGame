@@ -135,7 +135,7 @@ bool game_start(void) {
     for (uint8_t n = 0; n < NUM_PANELS; n++) game_shared_set_online(&game, n, true);
 #endif
     if (!net_register_handler(MQTT_TAP_TOPIC, on_tap)) return false;
-    if (!net_register_handler(MQTT_TOPIC_ROOT "/+/status", on_status)) return false;
+   // if (!net_register_handler(MQTT_TOPIC_ROOT "/+/status", on_status)) return false;
     return xTaskCreate(game_task, "game", GAME_TASK_STACK, NULL,
                        GAME_TASK_PRIORITY, NULL) == pdPASS;
 }

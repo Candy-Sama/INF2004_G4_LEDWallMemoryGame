@@ -6,23 +6,41 @@
 
 /* ---------------- pure game logic (no RTOS, call with lock held) ---------------- */
 
-void game_shuffle_board(GameManager* game) {
-    uint8_t deck[NUM_PANELS] = {1, 1, 2, 2, 3, 3};
+// void game_shuffle_board(GameManager* game) {
+//     uint8_t deck[NUM_PANELS] = {1, 1, 2, 2, 3, 3};
 
-    // Fisher-Yates shuffle
-    for (int i = NUM_PANELS - 1; i > 0; i--) {
+//     // Fisher-Yates shuffle
+//     for (int i = NUM_PANELS - 1; i > 0; i--) {
+//         int j = rand() % (i + 1);
+//         uint8_t temp = deck[i];
+//         deck[i] = deck[j];
+//         deck[j] = temp;
+//     }
+
+//     game->board_p0 = deck[0];
+//     game->board_p1 = deck[1];
+//     game->board_p2 = deck[2];
+//     game->board_p3 = deck[3];
+//     game->board_p4 = deck[4];
+//     game->board_p5 = deck[5];
+// }
+
+void game_shuffle_board(GameManager* game) {
+    uint8_t deck[4] = {1, 1, 2, 2};
+
+    for (int i = 3; i > 0; i--) {
         int j = rand() % (i + 1);
         uint8_t temp = deck[i];
         deck[i] = deck[j];
         deck[j] = temp;
     }
 
-    game->board_p0 = deck[0];
-    game->board_p1 = deck[1];
-    game->board_p2 = deck[2];
-    game->board_p3 = deck[3];
-    game->board_p4 = deck[4];
-    game->board_p5 = deck[5];
+    game->board_p0 = deck[0];   // node 1
+    game->board_p1 = deck[1];   // node 2
+    game->board_p2 = deck[2];   // node 3
+    game->board_p3 = 3;         // node 4, unused in this test
+    game->board_p4 = deck[3];   // node 5
+    game->board_p5 = 3;         // node 6, unused in this test
 }
 
 void game_init(GameManager* game) {

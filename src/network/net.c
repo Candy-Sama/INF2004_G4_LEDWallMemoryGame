@@ -27,7 +27,7 @@
 
 // API: the join/registry node is NOT necessarily the game engine node.
 // Keeps Nabillah's original behaviour (identity_is_master). Confirm with her.
-#define REGISTRY_MASTER_NODE 4
+#define REGISTRY_MASTER_NODE 1
 #define IS_REGISTRY_MASTER (identity_node_id() == REGISTRY_MASTER_NODE)
 
 static QueueHandle_t net_event_q;
