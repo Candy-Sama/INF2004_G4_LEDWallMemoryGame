@@ -70,6 +70,7 @@ add_executable(LED_MEMORY_GAME
     src/sensors/buzzer.c
     src/layout/node_identity.c
     src/layout/node_registry.c
+    src/network/faults.c
 )
 
 add_dependencies(LED_MEMORY_GAME generate_images)

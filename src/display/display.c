@@ -11,6 +11,8 @@
 #include "ledmatrix.h"
 #include "imagedata.h"
 #include "start_word.h"
+#include "faults.h"
+#include "wire_format.h"
 
 #define DISPLAY_TASK_PRIORITY 4
 #define DISPLAY_TASK_STACK    512
@@ -25,7 +27,12 @@ static volatile uint8_t s_slot = SLOT_UNKNOWN;
 
 static void send_cmd(cmd_kind_t kind, const uint8_t *image, uint8_t r, uint8_t g, uint8_t b) {
     display_cmd_t cmd = { kind, image, r, g, b };
-    xQueueSend(display_q, &cmd, 0);
+    // Check if the queue is full and update the shared fault bitmask accordingly
+    if (xQueueSend(display_q, &cmd, 0) == pdPASS) {
+        fault_clear(FAULT_DISPLAY);
+    } else {
+        fault_set(FAULT_DISPLAY);
+    }
 }
 
 void display_show_colour(uint8_t r, uint8_t g, uint8_t b) { send_cmd(CMD_COLOUR, NULL, r, g, b); }
