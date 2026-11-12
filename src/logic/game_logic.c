@@ -46,11 +46,13 @@ void game_shuffle_board(GameManager* game) {
 void game_init(GameManager* game) {
     game->first_selection  = NO_SELECTION;
     game->second_selection = NO_SELECTION;
+    game->sound_enabled    = 1;
     game->total_matches    = 0;
     game->matched_bitmask  = 0;
     game->paused_from      = STATE_WAIT_FIRST_CARD;
     game_shuffle_board(game);
     game->current_state    = STATE_WAIT_FIRST_CARD;
+
 }
 
 uint8_t get_card_at_panel(const GameManager* game, uint8_t panel_id) {

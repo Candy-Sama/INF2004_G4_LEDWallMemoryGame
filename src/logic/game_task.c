@@ -33,8 +33,19 @@ void game_begin(void) { s_started = true; printf("Game: begin\n"); }
 static void on_tap(const char *topic, const uint8_t *p, size_t len) {
     (void)topic;
     if ((!s_started && !s_arranging) || len != 1) return;
-    uint8_t node = p[0] & 7;                         // sender's node ID 1..6
+    
+    // Unpack the 1-byte struct sent by Member 4
+    uint8_t node = p[0] & 0x0F;                         // Lower 4 bits: sender's node ID 1..6
+    uint8_t is_double_tap = (p[0] >> 7) & 0x01;         // Top bit (bit 7): tap type
+    
     if (node < 1 || node > NUM_PANELS) return;
+    
+    // Member 5 Rule: Ignore double taps completely
+    if (is_double_tap) {
+        printf("Game Rule: Double tap ignored from panel %d\n", node);
+        return; // Drop the tap here so the game loop never sees it
+    }
+
     tap_evt_t evt = { .panel_id = (uint8_t)(node - 1), .from_node = node };
     xQueueSend(tap_q, &evt, 0);
 }

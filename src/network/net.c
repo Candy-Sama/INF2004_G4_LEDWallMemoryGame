@@ -113,7 +113,7 @@ static void drain_publish_queue(void) {
 
 /* ------------------------------------------------------------ existing code */
 
-static void send_movement(void) {
+static void send_movement(app_event_t evt) {
     static uint32_t last_send_ms = 0;
     
     if (!is_wifi_connected() || !is_mqtt_connected()) return;
@@ -123,8 +123,10 @@ static void send_movement(void) {
     // Hardware debounce: Ignores rapid physical vibrations under 1.5 seconds
     if (last_send_ms != 0 && (now_ms - last_send_ms) < 1500) return;
 
+    uint8_t tap_type_bit = (evt == APP_EVT_MOTION_DOUBLE) ? 1 : 0;
+
     // Send the raw tap event to the Game Master
-    uint8_t payload = identity_node_id();
+    uint8_t payload = (identity_node_id() & 0x0F) | (tap_type_bit << 7);
     if (net_publish(MQTT_TAP_TOPIC, &payload, 1, false)) {
         last_send_ms = now_ms;
         printf("[%lu ms] Movement: Tap sent to Game Master\n", (unsigned long)now_ms);
@@ -136,7 +138,9 @@ static void send_movement(void) {
 static void handle_sensor_events(void) {
     app_event_t evt;
     while (xQueueReceive(net_event_q, &evt, 0) == pdTRUE) {
-        if (evt == APP_EVT_MOTION) send_movement();
+        if (evt == APP_EVT_MOTION_SINGLE || evt == APP_EVT_MOTION_DOUBLE) {
+            send_movement(evt); 
+        }
     }
 }
 

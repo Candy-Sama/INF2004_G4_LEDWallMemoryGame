@@ -110,9 +110,11 @@ static void sensor_task(void *arg) {
             if (tap == TAP_SINGLE) {
                 printf("SINGLE\n");
 
-                app_event_t evt = APP_EVT_MOTION;
+                app_event_t evt = APP_EVT_MOTION_SINGLE;
                 xQueueSend(sensor_event_q, &evt, 0);
             } else if (tap == TAP_DOUBLE) {
+                app_event_t evt = APP_EVT_MOTION_DOUBLE;
+                xQueueSend(sensor_event_q, &evt, 0);
                 printf("DOUBLE ignored\n");
             }
         }
