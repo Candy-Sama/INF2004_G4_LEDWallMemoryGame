@@ -10,10 +10,10 @@
 // Desk movement demo: only node 1 sends commands to PEER_NODE_ID.
 #define ENABLE_MOTION_TEST 0
 #define IMU_LOG_READINGS 0  // Set to 1 to print X/Y/Z twice a second.
-#define MOTION_THRESHOLD_MG 250
+#define MOTION_THRESHOLD_MG 175
 #define MOTION_RELEASE_MG 80
-#define MOTION_QUIET_MS 200
-#define MOTION_COOLDOWN_MS 800
+#define MOTION_QUIET_MS 40
+#define MOTION_COOLDOWN_MS 80
  
 // Orientation (accelerometer gravity vector, see src/sensors/orientation.h)
 #define ENABLE_AUTO_ROTATE 0       // 1 = rotate card images to stay upright
@@ -28,6 +28,9 @@
 #define ORIENT_AXIS_HYST_MG 150     // extra margin before switching X<->Y dominance
 #define ENABLE_ORIENTATION_SYNC 1   // 1 = rotating one panel rotates every panel (via MQTT)
 
+// To handle the double taps and single taps (Mus)
+#define TAP_MIN_GAP_MS 80u
+#define TAP_DOUBLE_WINDOW_MS 400u
 
 /* 
 #if NODE_ID < 1 || NODE_ID > 6

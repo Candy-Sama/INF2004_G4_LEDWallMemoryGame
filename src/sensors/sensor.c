@@ -41,6 +41,7 @@ static void sensor_task(void *arg) {
 
     motion_detector_t detector;
     memset(&detector, 0, sizeof(detector));
+    tap_classifier_t classifier = {0};
     orientation_detector_t orient;
     orientation_detector_init(&orient);
 #if ENABLE_ORIENTATION_SYNC
@@ -55,6 +56,7 @@ static void sensor_task(void *arg) {
         imu_read_result_t result = imu_read_acceleration(&sample);
 
         if (result == IMU_READ_ERROR) {
+            classifier.pending = false;
             detector.initialised = false;
             orientation_detector_init(&orient);   // do not trust an old pose after a read error
             s_orientation = ORIENT_UNKNOWN;
@@ -64,9 +66,11 @@ static void sensor_task(void *arg) {
         if (result == IMU_NEW_DATA) {
 #if IMU_LOG_READINGS
             if ((int32_t)(xTaskGetTickCount() - next_print) >= 0) {
-                printf("Node %d IMU: X=%d mg Y=%d mg Z=%d mg\n",
-                       identity_node_id(), sample.x_mg, sample.y_mg, sample.z_mg);
-                next_print = xTaskGetTickCount() + pdMS_TO_TICKS(500);
+                printf("[%lu ms] Node %d IMU: X=%d mg Y=%d mg Z=%d mg\n",
+                    (unsigned long)to_ms_since_boot(get_absolute_time()),
+                    identity_node_id(),
+                    sample.x_mg, sample.y_mg, sample.z_mg);
+                next_print = xTaskGetTickCount() + pdMS_TO_TICKS(10);
             }
 #endif
             uint32_t now_ms = to_ms_since_boot(get_absolute_time());
@@ -99,8 +103,17 @@ static void sensor_task(void *arg) {
                                                 sample.z_mg,
                                                 to_ms_since_boot(get_absolute_time()));
             if (moved) {
+                printf("[%lu ms] CANDIDATE\n", (unsigned long)now_ms);
+            }
+            tap_result_t tap = tap_classifier_update(&classifier, moved, now_ms);
+
+            if (tap == TAP_SINGLE) {
+                printf("SINGLE\n");
+
                 app_event_t evt = APP_EVT_MOTION;
                 xQueueSend(sensor_event_q, &evt, 0);
+            } else if (tap == TAP_DOUBLE) {
+                printf("DOUBLE ignored\n");
             }
         }
         vTaskDelay(pdMS_TO_TICKS(10));

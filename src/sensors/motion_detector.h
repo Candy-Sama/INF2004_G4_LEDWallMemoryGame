@@ -3,7 +3,46 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include "node_config.h"
+
+/* Variables to determine if none,single and double tap (Mus) */
+typedef enum { //Enum means that the variable can only be one of the following values.
+    TAP_NONE = 0, //default value, no tap detected
+    TAP_SINGLE,
+    TAP_DOUBLE
+} tap_result_t; //This tap_result_t is a variable type
+
+typedef struct{
+    bool pending;
+    uint32_t first_tap_ms;
+} tap_classifier_t;
+
+static inline tap_result_t tap_classifier_update(tap_classifier_t *state, bool valid_tap, uint32_t now_ms) {
+    if (valid_tap && !state->pending){
+        state->pending = true;
+        state->first_tap_ms = now_ms; //begins the timer
+        return TAP_NONE;
+    }
+
+    if (state->pending && (uint32_t)(now_ms - state->first_tap_ms) >= 400u) { //if the timer went past 400ms
+        state->pending = valid_tap;
+        if (valid_tap) {
+            state->first_tap_ms = now_ms; //reset the timer
+        }
+        return TAP_SINGLE;
+    }
+    else if (state->pending && valid_tap &&
+            (uint32_t)(now_ms - state->first_tap_ms) >= 80u && //This is after the trheshold.
+            (uint32_t)(now_ms - state->first_tap_ms) < 400u) {
+        state->pending = false;
+        return TAP_DOUBLE;
+    }
+    return TAP_NONE;
+}
+
+
+/* End of double tap detection code */
 
 // A movement experiment, not a calibrated panel-tap classifier.
 typedef struct {
@@ -35,7 +74,17 @@ static inline bool motion_detector_update(motion_detector_t *state,
         state->quiet_since_ms = now_ms;
         return false;
     }
-    if (state->armed && largest_change >= MOTION_THRESHOLD_MG) {
+    /* Debug 
+    if (!state->armed && largest_change >= MOTION_THRESHOLD_MG) {
+        printf("[%lu ms] BLOCKED: change=%d mg, quiet=%lu ms, gap=%lu ms\n",
+            (unsigned long)now_ms,
+            largest_change,
+            (unsigned long)(now_ms - state->quiet_since_ms),
+            (unsigned long)(now_ms - state->last_trigger_ms));
+    }
+    */
+
+    if (state->armed && largest_change >= MOTION_THRESHOLD_MG) { //If this is armed, AND its not more than the threshold. 
         state->armed = false;
         state->triggered = true;
         state->last_trigger_ms = now_ms;
