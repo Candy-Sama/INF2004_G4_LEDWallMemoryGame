@@ -20,6 +20,11 @@
  *  Join request            join              8      raw 64-bit Pico unique board ID
  *  Join reply              assign/<board>    1      node[2:0]
  *  Orientation (existing)  orientation       1      turns[1:0]
+ *  Clock tick              sync/tick         5      seq[7:4] spare[3:0] | master_us[31:0]
+ *  Play request (PC)       sync/req          3      anim[7:6] spare[5:0] | delay_ms[15:0]
+ *  Play command            sync/play         5      anim[7:6] seq[5:2] spare[1:0] | start_us[31:0]
+ *
+
  */
 
 #include <stdbool.h>
@@ -165,5 +170,69 @@ static inline bool wire_assign_decode(const uint8_t *p, size_t len, uint8_t *nod
     *node = n;
     return true;
 }
+
+/* ------------------------------------------------ shared clock + animation */
+ 
+#define WIRE_ANIM_COUNT   4        /* animation IDs 0..3 = A, B, C, D */
+#define WIRE_TICK_LEN     5
+#define WIRE_REQ_LEN      3
+#define WIRE_PLAY_LEN     5
+#define WIRE_REQ_DELAY_MAX_MS 60000u
+ 
+static inline void wire_put_u32(uint8_t *out, uint32_t v) {
+    out[0] = (uint8_t)(v >> 24); out[1] = (uint8_t)(v >> 16);
+    out[2] = (uint8_t)(v >> 8);  out[3] = (uint8_t)v;
+}
+static inline uint32_t wire_get_u32(const uint8_t *p) {
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+}
+ 
+/* sync/tick: clock master -> everyone, QoS 0, NEVER retained (a retained tick is
+ * a stale timestamp for every late subscriber). master_us = master's time_us_32()
+ * taken immediately before the publish call. seq is a 4-bit loss counter. */
+static inline void wire_tick_encode(uint8_t seq, uint32_t master_us, uint8_t out[WIRE_TICK_LEN]) {
+    out[0] = (uint8_t)((seq & 0xFu) << 4);
+    wire_put_u32(out + 1, master_us);
+}
+static inline bool wire_tick_decode(const uint8_t *p, size_t len, uint8_t *seq, uint32_t *master_us) {
+    if (p == NULL || len != WIRE_TICK_LEN || seq == NULL || master_us == NULL) return false;
+    if (p[0] & 0x0Fu) return false;                 /* spare bits must be 0 */
+    *seq = p[0] >> 4;
+    *master_us = wire_get_u32(p + 1);
+    return true;
+}
+ 
+/* sync/req: central PC -> clock master. "Play animation X, delay_ms from now".
+ * The PC cannot know the Picos' clock, so the master converts the relative delay
+ * into an absolute start time on the shared timeline. */
+static inline void wire_req_encode(uint8_t anim, uint16_t delay_ms, uint8_t out[WIRE_REQ_LEN]) {
+    out[0] = (uint8_t)((anim & 0x3u) << 6);
+    out[1] = (uint8_t)(delay_ms >> 8);
+    out[2] = (uint8_t)delay_ms;
+}
+static inline bool wire_req_decode(const uint8_t *p, size_t len, uint8_t *anim, uint16_t *delay_ms) {
+    if (p == NULL || len != WIRE_REQ_LEN || anim == NULL || delay_ms == NULL) return false;
+    if (p[0] & 0x3Fu) return false;
+    *anim = p[0] >> 6;
+    *delay_ms = (uint16_t)(p[1] << 8 | p[2]);
+    return true;
+}
+ 
+/* sync/play: clock master -> every node. QoS 1, NEVER retained (a retained play
+ * would replay an old animation on reconnect). start_us is on the master timeline
+ * (the same clock as the tick), so each node converts it with its own offset. */
+static inline void wire_play_encode(uint8_t anim, uint8_t seq, uint32_t start_us, uint8_t out[WIRE_PLAY_LEN]) {
+    out[0] = (uint8_t)((anim & 0x3u) << 6 | (seq & 0xFu) << 2);
+    wire_put_u32(out + 1, start_us);
+}
+static inline bool wire_play_decode(const uint8_t *p, size_t len, uint8_t *anim, uint8_t *seq, uint32_t *start_us) {
+    if (p == NULL || len != WIRE_PLAY_LEN || anim == NULL || seq == NULL || start_us == NULL) return false;
+    if (p[0] & 0x03u) return false;
+    *anim = p[0] >> 6;
+    *seq = (p[0] >> 2) & 0xFu;
+    *start_us = wire_get_u32(p + 1);
+    return true;
+}
+
 
 #endif /* WIRE_FORMAT_H */

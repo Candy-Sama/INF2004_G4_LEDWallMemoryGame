@@ -1,4 +1,4 @@
-// net.c  (Mustaqim's module: Wi-Fi, MQTT, reconnection; Nabillah's join/registry)
+// net.c  (Mustaqim's module: Wi-Fi, MQTT, reconnection; Nabillah's join/registry ; Afiqah's synchronized animation)
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
@@ -20,6 +20,7 @@
 #include "game_logic.h"
 #include "imu_orientation.h"
 #include "node_registry.h"
+#include "clock_sync.h"
 
 #define NET_TASK_PRIORITY 2
 #define NET_TASK_STACK    2048
@@ -85,8 +86,13 @@ static bool topic_matches(const char *f, const char *t) {
     return *t == '\0';
 }
 
+/* ------------------------------------------------------------ NEW! 12 Nov receive loop */ 
+static uint32_t s_rx_us;
+uint32_t net_rx_time_us(void) { return s_rx_us; }
+
 static bool dispatch_to_handlers(const mqtt_message_t *msg) {
     bool handled = false;
+    s_rx_us = msg->rx_us;
     for (size_t i = 0; i < s_handler_count; i++) {
         if (topic_matches(s_handlers[i].filter, msg->topic)) {
             s_handlers[i].fn(msg->topic, msg->payload, msg->length);
@@ -384,6 +390,7 @@ static void net_task(void *arg) {
             publish_orientation();
 #endif
             publish_status();
+            clock_sync_poll();                                  // clock master: stamp + send tick
             drain_publish_queue();                              // API
         } else {
             xQueueReset(net_event_q);

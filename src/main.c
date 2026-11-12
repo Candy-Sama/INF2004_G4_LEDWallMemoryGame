@@ -12,6 +12,7 @@
 #include "game_task.h"
 #include "buzzer.h"
 #include "setup.h"
+#include "clock_sync.h"
 
 #ifndef WAIT_FOR_USB
 #define WAIT_FOR_USB 0
@@ -65,10 +66,14 @@ int main(void) {
     if (!buzzer_start()) { printf("buzzer failed\n"); for (;;) {} }     
     if (assigned && !setup_start()) { printf("setup failed\n"); for (;;) {} }  
 
+     if (!clock_sync_start()) { printf("clock sync failed\n"); for (;;) {} }   // before net_start()
+
     if (!sensor_start()) { printf("sensor failed\n"); for (;;) {} }   // before net_start()
     if (!net_start())    { printf("net failed\n");    for (;;) {} }
 
     if (!assigned) display_show_colour(12, 6, 0);   // dim orange until a number arrives
+
+   
 
     vTaskStartScheduler();
     for (;;) {}

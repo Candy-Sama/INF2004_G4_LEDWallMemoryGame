@@ -24,6 +24,7 @@ typedef struct {
     char topic[MQTT_TOPIC_MAX_LENGTH + 1];
     uint8_t payload[MQTT_PAYLOAD_MAX_LENGTH];
     size_t length;
+    uint32_t rx_us;
 } mqtt_message_t;
 
 // Call these APIs from one owner (currently the main loop) after Wi-Fi

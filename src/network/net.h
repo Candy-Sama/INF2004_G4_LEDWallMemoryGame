@@ -18,4 +18,8 @@ bool net_register_handler(const char *topic_filter, net_rx_handler_t fn);
 // true = queued, not delivered.
 bool net_publish(const char *topic, const void *data, size_t len, bool retain);
 
+//Arrival time (time_us_32) of the message a handler is being called for. 
+//Valid only inside the net_rx_handler_t call. Stamped inside the lwIP callback, not at the 10 ms poll.
+uint32_t net_rx_time_us(void);
+
 bool net_start(void);   // call last, after every module has registered its handlers

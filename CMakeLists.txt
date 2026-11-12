@@ -71,6 +71,7 @@ add_executable(LED_MEMORY_GAME
     src/layout/node_identity.c
     src/layout/node_registry.c
     src/network/faults.c
+    src/network/clock_sync.c
 )
 
 add_dependencies(LED_MEMORY_GAME generate_images)

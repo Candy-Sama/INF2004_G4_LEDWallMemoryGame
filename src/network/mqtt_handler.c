@@ -6,6 +6,7 @@
 #include "lwip/apps/mqtt.h"
 #include "lwip/sys.h"
 #include "pico/cyw43_arch.h"
+#include "pico/time.h" 
 
 #define CONNECTION_RETRY_MS 5000
 #define SUBSCRIPTION_RETRY_MS 1000
@@ -78,6 +79,7 @@ static void incoming_publish_cb(void *arg, const char *topic, u32_t total_length
     }
     strcpy(incoming.topic, topic);
     incoming.length = total_length;
+    incoming.rx_us = time_us_32();
     incoming_valid = true;
     // An empty MQTT payload is valid, including retained-message clearing.
     if (total_length == 0) enqueue_incoming();
