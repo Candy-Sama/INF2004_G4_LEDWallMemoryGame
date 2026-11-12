@@ -24,7 +24,8 @@ typedef enum {
 // Compressed struct satisfying the Minimum-Bit Change Requirement
 typedef struct {
     uint32_t current_state    : 3;
-    uint32_t paused_from      : 3;
+    uint32_t paused_from      : 2;
+    uint32_t sound_enabled    : 1;
     uint32_t total_matches    : 2;
     uint32_t first_selection  : 3;
     uint32_t second_selection : 3;
