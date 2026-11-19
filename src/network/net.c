@@ -121,7 +121,7 @@ static void send_movement(app_event_t evt) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
     // Debounce: ignore rapid physical vibrations under 1.5 s
-    if (last_send_ms != 0 && (now_ms - last_send_ms) < 1500) return;
+    if (last_send_ms != 0 && (now_ms - last_send_ms) < 1000 ) return;
 
     uint8_t tap_val = 0;                              // 1 = single, 2 = double, 3 = triple
     if (evt == APP_EVT_MOTION_SINGLE)      tap_val = 1;

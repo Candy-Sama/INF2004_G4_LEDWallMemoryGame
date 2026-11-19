@@ -21,13 +21,13 @@ static const note_t MATCH_STANDARD[] = {{880,100},{1175,160}};
 static const note_t MATCH_MARIO[]    = {{659,90},{659,90},{0,60},{659,90},{0,60},{523,90},{659,90},{784,200}};
 static const note_t MATCH_PIANO[]    = {{523,80},{659,80},{784,80},{1047,160}};
 
-// DJ pads (one per panel)
-static const note_t DJ_KICK[]  = {{60,40}};
-static const note_t DJ_HAT[]   = {{5000,10}};
-static const note_t DJ_SNARE[] = {{800,15},{200,25}};
-static const note_t DJ_SYNTH[] = {{1047,80}};
-static const note_t DJ_BASS[]  = {{130,100}};
-static const note_t DJ_LASER[] = {{2000,10},{1500,10},{1000,10},{500,20}};
+// Louder 8-Bit DJ pads (tuned to the piezo buzzer's resonant range)
+static const note_t DJ_KICK[]  = {{2000,20},{900,30},{450,40},{260,50}};       // Panel 1: Punchy kick drop
+static const note_t DJ_HAT[]   = {{3600,20},{4200,20},{3200,30}};                 // Panel 2: Crisp metallic hi-hat
+static const note_t DJ_SNARE[] = {{2400,25},{1100,25},{1900,25},{750,45}};        // Panel 3: Sharp snare snap
+static const note_t DJ_SYNTH[] = {{1568,55},{2093,95}};                           // Panel 4: Bright synth stab
+static const note_t DJ_BASS[]  = {{659,65},{440,95}};                             // Panel 5: Audible arcade bass
+static const note_t DJ_LASER[] = {{3200,25},{2400,25},{1600,25},{900,40}};        // Panel 6: Loud laser sweep
 
 #define COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -72,7 +72,6 @@ static void buzzer_task(void *arg) {
     pwm_set_clkdiv(slice, (float)clock_get_hz(clk_sys) / 1000000.0f);
     pwm_set_enabled(slice, true);
     tone(0);
-
     uint8_t id;
     for (;;) {
         if (xQueueReceive(buzz_q, &id, portMAX_DELAY) != pdTRUE) continue;

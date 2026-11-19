@@ -28,7 +28,7 @@ typedef struct {
     uint32_t first_selection  : 3;
     uint32_t second_selection : 3;
     uint32_t matched_bitmask  : 6;   // bit n = panel n locked
-    uint32_t sound_profile    : 2;   // 0..3
+    uint32_t sound_profile    : 2;   // 0=Standard, 1=Mario, 2=Piano, 3=Silent
     uint32_t is_dj_mode       : 1;   // 0 = memory game, 1 = DJ mode
     uint32_t board_p0 : 2, board_p1 : 2, board_p2 : 2,
              board_p3 : 2, board_p4 : 2, board_p5 : 2;   // card value per panel
@@ -43,7 +43,7 @@ static_assert(sizeof(GameManager) == 4, "GameManager must pack into 4 bytes");
 typedef struct {
     uint8_t panel_id  : 3;   // 0..5
     uint8_t from_node : 3;   // 1..6
-    uint8_t reserved  : 2;
+    uint8_t tap_type  : 2;   // 1 = single, 2 = double, 3 = triple
 } tap_evt_t;
 
 typedef struct {
@@ -56,18 +56,20 @@ typedef struct {
 void    game_init(GameManager *game);
 void    game_shuffle_board(GameManager *game);
 bool    game_process_input(GameManager *game, uint8_t panel_id);
+bool    game_process_tap(GameManager *game, uint8_t panel_id, uint8_t tap_type);
 void    game_evaluate_match(GameManager *game);
 uint8_t get_card_at_panel(const GameManager *game, uint8_t panel_id);
 
 // RTOS wrappers (take the mutex)
-bool game_shared_init(GameShared *g);
-bool game_shared_process_input(GameShared *g, uint8_t panel_id);
-bool game_shared_evaluate(GameShared *g);
-bool game_shared_snapshot(GameShared *g, GameManager *out);
-bool game_shared_restart(GameShared *g);
-void game_shared_set_online(GameShared *g, uint8_t node, bool online);
-void game_shared_toggle_dj_mode(GameShared *g);
-void game_shared_cycle_sound_profile(GameShared *g);
+bool    game_shared_init(GameShared *g);
+bool    game_shared_process_input(GameShared *g, uint8_t panel_id);
+bool    game_shared_process_tap(GameShared *g, uint8_t panel_id, uint8_t tap_type);
+bool    game_shared_evaluate(GameShared *g);
+bool    game_shared_snapshot(GameShared *g, GameManager *out);
+bool    game_shared_restart(GameShared *g);
+void    game_shared_set_online(GameShared *g, uint8_t node, bool online);
+void    game_shared_toggle_dj_mode(GameShared *g);
+uint8_t game_shared_cycle_sound_profile(GameShared *g);
 
 // Wire format (2 bytes)
 void game_pack_state(const GameManager *g, uint8_t out[2]);

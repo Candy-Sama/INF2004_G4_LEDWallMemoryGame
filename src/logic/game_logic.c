@@ -36,7 +36,6 @@ uint8_t get_card_at_panel(const GameManager *game, uint8_t panel_id) {
 void game_shuffle_board(GameManager *game) {
     uint8_t deck[ACTIVE_PANELS];
     for (int i = 0; i < ACTIVE_PANELS; i++) deck[i] = (uint8_t)(i / 2 + 1);
-
     for (int i = ACTIVE_PANELS - 1; i > 0; i--) {          // Fisher-Yates
         int j = rand() % (i + 1);
         uint8_t t = deck[i]; deck[i] = deck[j]; deck[j] = t;
@@ -54,8 +53,6 @@ void game_init(GameManager *game) {
     game->first_selection  = NO_SELECTION;
     game->second_selection = NO_SELECTION;
     game->total_matches    = 0;
-    game->sound_profile    = 0;
-    game->is_dj_mode       = 0;
     game_shuffle_board(game);                               // also sets matched_bitmask
     game->current_state    = STATE_WAIT_FIRST_CARD;
 }
@@ -72,7 +69,7 @@ bool game_process_input(GameManager *game, uint8_t panel_id) {
         return true;
     }
     if (game->current_state == STATE_WAIT_SECOND_CARD) {
-        if (panel_id == game->first_selection) return false;   // FR8
+        if (panel_id == game->first_selection) return false;   // FR8: same card rejected
         game->second_selection = panel_id;
         game->current_state    = STATE_EVALUATE_MATCH;
         return true;
@@ -80,9 +77,23 @@ bool game_process_input(GameManager *game, uint8_t panel_id) {
     return false;
 }
 
+// Rule definition: Single tap (1) selects a card; Double tap (2) is ignored.
+bool game_process_tap(GameManager *game, uint8_t panel_id, uint8_t tap_type) {
+    if (tap_type == 2) {
+        printf("Game Rule: Double tap ignored on panel %u\n", (unsigned)(panel_id + 1));
+        return false;
+    }
+    if (tap_type == 1) {
+        bool ok = game_process_input(game, panel_id);
+        printf("Game Rule: Single tap on panel %u -> %s\n",
+               (unsigned)(panel_id + 1), ok ? "card selected" : "rejected");
+        return ok;
+    }
+    return false;
+}
+
 void game_evaluate_match(GameManager *game) {
     if (game->current_state != STATE_EVALUATE_MATCH) return;
-
     uint8_t card1 = get_card_at_panel(game, game->first_selection);
     uint8_t card2 = get_card_at_panel(game, game->second_selection);
 
@@ -90,7 +101,6 @@ void game_evaluate_match(GameManager *game) {
         game->matched_bitmask |= (1u << game->first_selection);
         game->matched_bitmask |= (1u << game->second_selection);
         game->total_matches   += 1;
-
         if (game->total_matches >= NUM_PAIRS) {
             game->current_state = STATE_GAME_WON;
             return;
@@ -106,21 +116,27 @@ void game_evaluate_match(GameManager *game) {
 bool game_shared_init(GameShared *g) {
     g->lock = xSemaphoreCreateMutex();
     if (!g->lock) return false;
-    g->online_mask = 0;
+    g->online_mask         = 0;
+    g->state.sound_profile = 0;
+    g->state.is_dj_mode    = 0;
     game_init(&g->state);
     g->state.current_state = STATE_PAUSED_DISCONNECT;      // wait for all nodes
     return true;
 }
 
 bool game_shared_process_input(GameShared *g, uint8_t panel_id) {
+    return game_shared_process_tap(g, panel_id, 1);
+}
+
+bool game_shared_process_tap(GameShared *g, uint8_t panel_id, uint8_t tap_type) {
     if (xSemaphoreTake(g->lock, LOCK_TIMEOUT) != pdTRUE) {
         printf("MUTEX: timeout (tap %u)\n", panel_id);
         return false;
     }
-    printf("MUTEX: taken (tap %u)\n", panel_id);
-    bool ok = game_process_input(&g->state, panel_id);
+    printf("MUTEX: taken (panel %u, type %u)\n", panel_id + 1, tap_type);
+    bool ok = game_process_tap(&g->state, panel_id, tap_type);
     xSemaphoreGive(g->lock);
-    printf("MUTEX: given (tap %u)%s\n", panel_id, ok ? "" : " [rejected]");
+    printf("MUTEX: given (panel %u)%s\n", panel_id + 1, ok ? "" : " [ignored/rejected]");
     return ok;
 }
 
@@ -140,7 +156,7 @@ bool game_shared_snapshot(GameShared *g, GameManager *out) {
 
 bool game_shared_restart(GameShared *g) {
     if (xSemaphoreTake(g->lock, LOCK_TIMEOUT) != pdTRUE) return false;
-    game_init(&g->state);
+    game_init(&g->state);                                  // keeps sound_profile & is_dj_mode
     if (g->online_mask != ALL_ONLINE) {                    // stay paused if someone is missing
         g->state.current_state = STATE_PAUSED_DISCONNECT;
     }
@@ -151,7 +167,6 @@ bool game_shared_restart(GameShared *g) {
 void game_shared_set_online(GameShared *g, uint8_t node, bool online) {
     if (node >= NUM_PANELS) return;
     if (xSemaphoreTake(g->lock, LOCK_TIMEOUT) != pdTRUE) return;
-
     if (online) g->online_mask |=  (1u << node);
     else        g->online_mask &= ~(1u << node);
 
@@ -175,11 +190,14 @@ void game_shared_toggle_dj_mode(GameShared *g) {
     xSemaphoreGive(g->lock);
 }
 
-void game_shared_cycle_sound_profile(GameShared *g) {
-    if (xSemaphoreTake(g->lock, LOCK_TIMEOUT) != pdTRUE) return;
+uint8_t game_shared_cycle_sound_profile(GameShared *g) {
+    if (xSemaphoreTake(g->lock, LOCK_TIMEOUT) != pdTRUE) return 0;
     g->state.sound_profile = (g->state.sound_profile + 1) % 4;
-    printf("Game Rule: Sound profile changed to %u\n", (unsigned)g->state.sound_profile);
+    uint8_t p = g->state.sound_profile;
+    static const char *names[4] = { "Standard", "Mario", "Piano", "Silent" };
+    printf("Game Rule: Sound profile toggled -> %u (%s)\n", (unsigned)p, names[p]);
     xSemaphoreGive(g->lock);
+    return p;
 }
 
 void game_pack_state(const GameManager *g, uint8_t out[2]) {
