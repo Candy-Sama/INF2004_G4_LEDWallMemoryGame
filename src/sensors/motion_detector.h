@@ -6,40 +6,45 @@
 #include <stdio.h>
 #include "node_config.h"
 
-/* Variables to determine if none,single and double tap (Mus) */
-typedef enum { //Enum means that the variable can only be one of the following values.
-    TAP_NONE = 0, //default value, no tap detected
-    TAP_SINGLE,
-    TAP_DOUBLE
-} tap_result_t; //This tap_result_t is a variable type
+/* Tap classifier: counts taps inside a window and reports single/double/triple. */
+#ifndef TAP_GAP_MS
+#define TAP_GAP_MS 400u     // window after the latest tap before the sequence is closed
+#endif
 
-typedef struct{
-    bool pending;
-    uint32_t first_tap_ms;
+typedef enum {
+    TAP_NONE = 0,
+    TAP_SINGLE,
+    TAP_DOUBLE,
+    TAP_TRIPLE
+} tap_result_t;
+
+typedef struct {
+    bool     pending;       // a sequence is in progress
+    uint8_t  count;         // taps so far
+    uint32_t last_tap_ms;   // time of the latest tap
 } tap_classifier_t;
 
-static inline tap_result_t tap_classifier_update(tap_classifier_t *state, bool valid_tap, uint32_t now_ms) {
-    if (valid_tap && !state->pending){
-        state->pending = true;
-        state->first_tap_ms = now_ms; //begins the timer
+static inline tap_result_t tap_classifier_update(tap_classifier_t *s, bool valid_tap, uint32_t now_ms) {
+    if (valid_tap) {
+        if (!s->pending) { s->pending = true; s->count = 0; }
+        s->count++;
+        s->last_tap_ms = now_ms;
+        if (s->count >= 3) {                 // third tap: report immediately
+            s->pending = false;
+            s->count = 0;
+            return TAP_TRIPLE;
+        }
         return TAP_NONE;
     }
-
-    if (state->pending && (uint32_t)(now_ms - state->first_tap_ms) >= 400u) { //if the timer went past 400ms
-        state->pending = valid_tap;
-        if (valid_tap) {
-            state->first_tap_ms = now_ms; //reset the timer
-        }
-        return TAP_SINGLE;
-    }
-    else if (state->pending && valid_tap &&
-            (uint32_t)(now_ms - state->first_tap_ms) >= 80u && //This is after the trheshold.
-            (uint32_t)(now_ms - state->first_tap_ms) < 400u) {
-        state->pending = false;
-        return TAP_DOUBLE;
+    if (s->pending && (uint32_t)(now_ms - s->last_tap_ms) >= TAP_GAP_MS) {
+        uint8_t n = s->count;                // window closed: report what we saw
+        s->pending = false;
+        s->count = 0;
+        return n == 1 ? TAP_SINGLE : TAP_DOUBLE;
     }
     return TAP_NONE;
 }
+/* End of tap detection code */
 
 
 /* End of double tap detection code */
