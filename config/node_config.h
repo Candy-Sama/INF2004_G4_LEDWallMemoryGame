@@ -17,7 +17,7 @@
  
 // Orientation (accelerometer gravity vector, see src/sensors/orientation.h)
 #define ENABLE_AUTO_ROTATE 0       // 1 = rotate card images to stay upright
-#define ORIENT_SENSOR_OFFSET 0      // 0..3 clockwise quarter turns if the GY-511 is
+#define ORIENT_SENSOR_OFFSET 3     // 0..3 clockwise quarter turns if the GY-511 is
                                     // mounted rotated relative to the LED panel
 #define ORIENT_SETTLE_MS 300        // must hold a new pose this long to be accepted
 #define ORIENT_MIN_MG 700           // ignore samples while moving (|a| outside 0.7-1.3 g)

@@ -96,7 +96,7 @@ static inline orientation_t orientation_classify(int x, int y, int z, orientatio
     } else {
         use_y = ay >= ax;
     }
-    if (use_y) return y > 0 ? ORIENT_UPRIGHT : ORIENT_UPSIDE_DOWN;
+    if (use_y) return y > 0 ? ORIENT_UPSIDE_DOWN : ORIENT_UPRIGHT;
     return x > 0 ? ORIENT_ROT_CCW90 : ORIENT_ROT_CW90;
 }
 

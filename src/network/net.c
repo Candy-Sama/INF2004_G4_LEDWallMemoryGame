@@ -7,7 +7,6 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
-
 #include "net.h"
 #include "node_config.h"
 #include "node_identity.h"
@@ -229,21 +228,6 @@ static void apply_received_command(void) {
         }
 
         if (dispatch_to_handlers(&message)) continue;          // API: game, setup, ...
-
-#if ENABLE_ORIENTATION_SYNC
-        if (strcmp(message.topic, MQTT_ORIENTATION_TOPIC) == 0) {
-            uint8_t turns;
-            if (orientation_sync_decode((const uint8_t *)message.payload, message.length, &turns)) {
-                display_set_rotation(turns);
-                printf("Orientation sync: rotation set to %u\n", (unsigned)turns);
-            } else {
-                printf("Orientation sync: ignored invalid payload (%u bytes).\n",
-                       (unsigned)message.length);
-            }
-            continue;
-        }
-#endif
-
         if (strcmp(message.topic, identity_command_topic()) != 0) continue;
         if (message.length == 7 && memcmp(message.payload, "diamond", 7) == 0) {
             display_show_image(diamondCard_bin);
@@ -279,18 +263,6 @@ static void publish_status(void) {
         next_publish = now + pdMS_TO_TICKS(1000);
     }
 }
-
-#if ENABLE_ORIENTATION_SYNC
-static void publish_orientation(void) {
-    uint8_t turns;
-    if (!sensor_take_orientation_change(&turns)) return;
-    if (!mqtt_send_ex(MQTT_ORIENTATION_TOPIC, &turns, 1, 1, true, NULL, NULL)) {
-        printf("Orientation sync: publish failed.\n");
-    } else {
-        printf("Orientation sync: shared rotation %u\n", (unsigned)turns);
-    }
-}
-#endif
 
 static void report_wifi_status(bool connected) {
     printf("Wi-Fi %s.\n", connected ? "connected" : "disconnected");
@@ -334,13 +306,6 @@ static void net_task(void *arg) {
             vTaskDelete(NULL);
         }
     }
-
-#if ENABLE_ORIENTATION_SYNC
-    if (!mqtt_subscribe_topic_qos(MQTT_ORIENTATION_TOPIC, 1)) {
-        printf("Could not register the orientation topic.\n");
-        vTaskDelete(NULL);
-    }
-#endif
 
     bool display_started = false;
     bool wifi_was_connected = true;
@@ -390,9 +355,6 @@ static void net_task(void *arg) {
             }
 
             apply_received_command();
-#if ENABLE_ORIENTATION_SYNC
-            publish_orientation();
-#endif
             publish_status();
             clock_sync_poll();                                  // clock master: stamp + send tick
             drain_publish_queue();                              // API
