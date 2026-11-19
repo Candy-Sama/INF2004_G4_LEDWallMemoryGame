@@ -13,21 +13,25 @@
 
 #define GAME_TASK_PRIORITY        3
 #define GAME_TASK_STACK           1024
-#define GAME_TEST_FORCE_ONLINE    1   // 1 = skip presence check (testing only)
-#define GAME_TEST_AUTOSTART       0   // 1 = skip waiting for START (testing only)
+#define GAME_TEST_FORCE_ONLINE    0   // 0 = count actual connected Picos via /status
+#define GAME_TEST_AUTOSTART       0
 #define GAME_BOOT_WAIT_MS         8000
 #define GAME_RESTART_DELAY_MS     5000
 #define GAME_ARRANGE_AT_BOOT      1
 #define GAME_REARRANGE_EACH_ROUND 0
 
-static GameShared    game;
-static QueueHandle_t tap_q;
-static volatile bool s_started;
-static volatile bool s_arranging;
+static GameShared       game;
+static QueueHandle_t    tap_q;
+static volatile bool    s_started;
+static volatile bool    s_arranging;
+static volatile bool    s_play_mario_relay;
+static volatile bool    s_use_fart_kit = true;
+static volatile uint8_t s_mario_trigger_node = 1;
+
 
 void game_begin(void) { s_started = true; printf("Game: begin\n"); }
 
-// ---- display & sound helpers (non-blocking MQTT publishes via Mustaqim's API) ----
+// ---- display & sound helpers ----
 
 static void show_on_node(uint8_t n, const char *payload) {
     char topic[64];
@@ -45,7 +49,67 @@ static void play_match_sound_for_profile(uint8_t profile) {
     if (profile == 0)      buzzer_play(BUZZ_MATCH_STANDARD);
     else if (profile == 1) buzzer_play(BUZZ_MATCH_MARIO);
     else if (profile == 2) buzzer_play(BUZZ_MATCH_PIANO);
-    // profile == 3 is Silent
+}
+
+// Splits the 20s Mario theme equally by duration across all connected nodes
+static void run_mario_relay(void) {
+    uint8_t mask = game_shared_get_online_mask(&game);
+    uint8_t connected[NUM_PANELS];
+    uint8_t count = 0;
+
+    for (uint8_t i = 0; i < NUM_PANELS; i++) {
+        if (mask & (1u << i)) {
+            connected[count++] = (uint8_t)(i + 1);
+        }
+    }
+    // Fallback if status messages haven't arrived yet
+    if (count == 0) {
+        connected[0] = s_mario_trigger_node;
+        count = 1;
+    }
+
+    uint8_t  total_notes = buzzer_mario_note_count();
+    uint32_t total_ms    = buzzer_mario_slice_ms(0, total_notes); // 20,000 ms
+    uint8_t  note_idx    = 0;
+    uint32_t elapsed_ms  = 0;
+
+    printf("Mario Relay: splitting %lu ms song across %u connected node(s)\n",
+           (unsigned long)total_ms, (unsigned)count);
+
+    for (uint8_t k = 0; k < count && note_idx < total_notes; k++) {
+        GameManager snap;
+        if (!game_shared_snapshot(&game, &snap) || !snap.is_dj_mode) break;
+
+        uint32_t target_ms = ((uint32_t)(k + 1) * total_ms) / count;
+        uint8_t start = note_idx;
+
+        if (k == count - 1) {
+            note_idx = total_notes;
+        } else {
+            while (note_idx < total_notes && elapsed_ms < target_ms) {
+                elapsed_ms += buzzer_mario_slice_ms(note_idx, (uint8_t)(note_idx + 1));
+                note_idx++;
+            }
+        }
+
+        uint32_t slice_ms = buzzer_mario_slice_ms(start, note_idx);
+        char cmd[16];
+        snprintf(cmd, sizeof(cmd), "ms:%u:%u", (unsigned)start, (unsigned)note_idx);
+        show_on_node(connected[k], cmd);
+
+        printf("Mario Relay: Node %u playing notes %u..%u (%lu ms)\n",
+               (unsigned)connected[k], (unsigned)start, (unsigned)note_idx, (unsigned long)slice_ms);
+
+        // Wait for this node's slice to finish before starting the next node
+        uint32_t waited = 0;
+        while (waited < slice_ms) {
+            uint32_t step = (slice_ms - waited > 100) ? 100 : (slice_ms - waited);
+            vTaskDelay(pdMS_TO_TICKS(step));
+            waited += step;
+            if (!game_shared_snapshot(&game, &snap) || !snap.is_dj_mode) break;
+        }
+        show_on_node(connected[k], "spade"); // restore DJ idle visual after its slice
+    }
 }
 
 // ---- net handlers (run inside net_task: keep tiny, never block) ----
@@ -55,42 +119,54 @@ static void on_tap(const char *topic, const uint8_t *p, size_t len) {
     if (len != 1) return;
 
     uint8_t node     = p[0] & 0x0F;
-    uint8_t tap_type = (p[0] >> 6) & 0x03; // Unpack top 2 bits (1=single, 2=double, 3=triple)
+    uint8_t tap_type = (p[0] >> 6) & 0x03;
 
     if (node < 1 || node > NUM_PANELS) return;
 
-    // --- 1. Toggle DJ Mode on Triple Tap from Panel 1 ---
+    // --- 1. Cycle Memory Game -> Fart Mode -> Drum Mode on Triple Tap from Panel 1 ---
     if (node == 1 && tap_type == 3) {
-        game_shared_toggle_dj_mode(&game);
+        s_play_mario_relay = false;
         GameManager s;
         if (game_shared_snapshot(&game, &s)) {
-            printf("Switched modes! DJ mode is now %s\n", s.is_dj_mode ? "ON" : "OFF");
-            show_on_all(s.is_dj_mode ? "spade" : "OFF");
+            if (!s.is_dj_mode) {
+                s_use_fart_kit = true;
+                game_shared_toggle_dj_mode(&game); // Memory -> Fart Mode
+                printf("Switched modes! FART mode is now ON\n");
+                show_on_all("spade");
+            } else if (s_use_fart_kit) {
+                s_use_fart_kit = false;            // Fart Mode -> Drum Mode
+                printf("Switched modes! DJ DRUM mode is now ON\n");
+                show_on_all("Clover");
+            } else {
+                game_shared_toggle_dj_mode(&game); // Drum Mode -> Memory Game
+                printf("Switched modes! Memory Game mode is now ON\n");
+                show_on_all("OFF");
+            }
         }
         return;
     }
-
-    // --- 2. DJ Mode Routing (separate from Memory Game & Mario song) ---
+    
+// --- 2. DJ Mode Routing ---
     GameManager snap;
     if (game_shared_snapshot(&game, &snap) && snap.is_dj_mode) {
-        // Double tap in DJ mode cycles the Memory Game sound profile (so 1 Pico can test it)
-        if (tap_type == 2) {
-            uint8_t new_prof = game_shared_cycle_sound_profile(&game);
-            play_match_sound_for_profile(new_prof);
-            return;
-        }
-
         if (tap_type == 1) {
-            static const buzz_id_t dj_sounds[NUM_PANELS] = {
-                BUZZ_DJ_1, BUZZ_DJ_2, BUZZ_DJ_3, BUZZ_DJ_4, BUZZ_DJ_5, BUZZ_DJ_6
+            static const char *dj_cmds[NUM_PANELS] = {
+                "dj1", "dj2", "dj3", "dj4", "dj5", "dj6"
             };
-            static const char *pad_img[NUM_PANELS] = {
-                "diamond", "Clover", "spade", "diamond", "Clover", "spade"
+            static const char *fart_cmds[NUM_PANELS] = {
+                "fart1", "fart2", "fart3", "fart4", "fart5", "fart6"
             };
-            buzzer_play(dj_sounds[node - 1]);
-            show_on_node(node, pad_img[node - 1]);
+            show_on_node(node, s_use_fart_kit ? fart_cmds[node - 1] : dj_cmds[node - 1]);
+        } else if (tap_type == 2) {
+            // Double tap in DJ mode triggers the 20s Mario relay across connected nodes
+            s_mario_trigger_node = node;
+            s_play_mario_relay   = true;
+        } else if (node == 2 && tap_type == 3) {
+            // Triple tap Panel 2 in DJ mode swaps between Fart Kit and DJ Drum Kit
+            s_use_fart_kit = !s_use_fart_kit;
+            printf("DJ Sound Kit: %s\n", s_use_fart_kit ? "FART" : "DRUMS");
         }
-        return; // Do NOT send DJ taps to the memory game queue
+        return;
     }
 
     // --- 3. Sound Profile Toggle in Memory Game Mode (Triple Tap on Panels 2..6) ---
@@ -100,7 +176,7 @@ static void on_tap(const char *topic, const uint8_t *p, size_t len) {
         return;
     }
 
-    // --- 4. Memory Game Routing (passes single & double taps to game_logic.c rules) ---
+    // --- 4. Memory Game Routing (single taps select, double taps ignored by game_logic) ---
     if (!s_started && !s_arranging) return;
 
     tap_evt_t evt = {
@@ -136,9 +212,13 @@ static void arrange_panels(void) {
     send_setup(SETUP_OP_ARRANGE, 0);
     printf("Arrange: tap %d panels in order\n", START_PANELS);
     while (count < START_PANELS) {
+        if (s_play_mario_relay) {
+            s_play_mario_relay = false;
+            run_mario_relay();
+        }
         tap_evt_t evt;
         if (xQueueReceive(tap_q, &evt, pdMS_TO_TICKS(500)) != pdTRUE) continue;
-        if (evt.tap_type != 1) continue; // only single taps assign panel slots
+        if (evt.tap_type != 1) continue;
         uint8_t node = evt.from_node;
         if (node > START_PANELS || (placed & (1u << node))) continue;
         placed |= (uint8_t)(1u << node);
@@ -172,12 +252,15 @@ static void game_task(void *arg) {
     begin_round();
 
     for (;;) {
-        // 1. Process incoming taps through game_logic.c rules (single vs double tap)
-        if (xQueueReceive(tap_q, &evt, pdMS_TO_TICKS(250)) == pdTRUE) {
+        if (s_play_mario_relay) {
+            s_play_mario_relay = false;
+            run_mario_relay();
+        }
+
+        if (xQueueReceive(tap_q, &evt, pdMS_TO_TICKS(100)) == pdTRUE) {
             game_shared_process_tap(&game, evt.panel_id, evt.tap_type);
         }
 
-        // 2. Take a snapshot of the current rules/state
         GameManager snap;
         if (!game_shared_snapshot(&game, &snap)) continue;
 
@@ -186,7 +269,6 @@ static void game_task(void *arg) {
             continue;
         }
 
-        // 3. TRANSLATOR LOOP: Tell each panel what to draw based on the game rules
         for (uint8_t i = 0; i < NUM_PANELS; i++) {
             bool is_revealed = (snap.matched_bitmask & (1 << i)) ||
                                (snap.first_selection == i) ||
@@ -209,31 +291,14 @@ static void game_task(void *arg) {
             }
         }
 
-        // 4. Handle match & win events (sound + LED animation hooks via net_publish)
         if (snap.current_state == STATE_EVALUATE_MATCH) {
             uint8_t card1 = get_card_at_panel(&snap, snap.first_selection);
             uint8_t card2 = get_card_at_panel(&snap, snap.second_selection);
 
             if (card1 == card2) {
-                printf("Game Event: Match on panels %u & %u (profile %u)\n",
-                       (unsigned)(snap.first_selection + 1),
-                       (unsigned)(snap.second_selection + 1),
-                       (unsigned)snap.sound_profile);
                 play_match_sound_for_profile(snap.sound_profile);
-
-                // Match animation pulse on the two matched panels
-                vTaskDelay(pdMS_TO_TICKS(350));
-                show_on_node(snap.first_selection + 1, "OFF");
-                show_on_node(snap.second_selection + 1, "OFF");
-                vTaskDelay(pdMS_TO_TICKS(250));
-                const char *match_img = (card1 == 1) ? "diamond" : (card1 == 2) ? "Clover" : "spade";
-                show_on_node(snap.first_selection + 1, match_img);
-                show_on_node(snap.second_selection + 1, match_img);
-                vTaskDelay(pdMS_TO_TICKS(400));
+                vTaskDelay(pdMS_TO_TICKS(1000));
             } else {
-                printf("Game Event: Mismatch on panels %u & %u\n",
-                       (unsigned)(snap.first_selection + 1),
-                       (unsigned)(snap.second_selection + 1));
                 buzzer_play(BUZZ_WRONG);
                 vTaskDelay(pdMS_TO_TICKS(1000));
             }
@@ -242,10 +307,7 @@ static void game_task(void *arg) {
             xQueueReset(tap_q);
 
         } else if (snap.current_state == STATE_GAME_WON) {
-            printf("Game Event: Win! Playing victory animation\n");
             s_started = false;
-
-            // Win animation sweep across all panels via Mustaqim's net_publish interface
             show_on_all("diamond");
             vTaskDelay(pdMS_TO_TICKS(500));
             show_on_all("Clover");
@@ -276,7 +338,7 @@ bool game_start(void) {
     for (uint8_t n = 0; n < NUM_PANELS; n++) game_shared_set_online(&game, n, true);
 #endif
     if (!net_register_handler(MQTT_TAP_TOPIC, on_tap)) return false;
-    // if (!net_register_handler(MQTT_TOPIC_ROOT "/+/status", on_status)) return false;
+    if (!net_register_handler(MQTT_TOPIC_ROOT "/+/status", on_status)) return false;
     return xTaskCreate(game_task, "game", GAME_TASK_STACK, NULL,
                        GAME_TASK_PRIORITY, NULL) == pdPASS;
 }

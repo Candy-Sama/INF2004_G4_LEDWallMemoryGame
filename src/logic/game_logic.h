@@ -70,6 +70,7 @@ bool    game_shared_restart(GameShared *g);
 void    game_shared_set_online(GameShared *g, uint8_t node, bool online);
 void    game_shared_toggle_dj_mode(GameShared *g);
 uint8_t game_shared_cycle_sound_profile(GameShared *g);
+uint8_t game_shared_get_online_mask(GameShared *g);
 
 // Wire format (2 bytes)
 void game_pack_state(const GameManager *g, uint8_t out[2]);
