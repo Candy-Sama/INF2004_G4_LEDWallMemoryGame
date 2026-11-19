@@ -15,6 +15,7 @@
 #include "mqtt_handler.h"
 #include "imagedata.h"
 #include "display.h"
+#include "buzzer.h"
 #include "sensor.h"
 #include "game_logic.h"
 #include "imu_orientation.h"
@@ -248,9 +249,42 @@ static void apply_received_command(void) {
         } else if (message.length == 3 && memcmp(message.payload, "OFF", 3) == 0) {
             display_show_colour(0, 0, 0);
             printf("LED command applied: OFF\n");
+        } else if (message.length == 3 && memcmp(message.payload, "dj", 2) == 0 &&
+                message.payload[2] >= '1' && message.payload[2] <= '6') {
+            uint8_t pad = (uint8_t)(message.payload[2] - '1');
+            static const buzz_id_t dj_sounds[6] = {
+                BUZZ_DJ_1, BUZZ_DJ_2, BUZZ_DJ_3, BUZZ_DJ_4, BUZZ_DJ_5, BUZZ_DJ_6
+            };
+            buzzer_play(dj_sounds[pad]);
+            if (pad % 3 == 0)      display_show_image(diamondCard_bin);
+            else if (pad % 3 == 1) display_show_image(cloverCard_bin);
+            else                   display_show_image(spadeCard_bin);
+            printf("DJ command applied: pad %u\n", (unsigned)(pad + 1));
+        } else if (message.length == 5 && memcmp(message.payload, "fart", 4) == 0 &&
+                message.payload[4] >= '1' && message.payload[4] <= '6') {
+            uint8_t pad = (uint8_t)(message.payload[4] - '1');
+            static const buzz_id_t fart_sounds[6] = {
+                BUZZ_FART_1, BUZZ_FART_2, BUZZ_FART_3, BUZZ_FART_4, BUZZ_FART_5, BUZZ_FART_6
+            };
+            buzzer_play(fart_sounds[pad]);
+            if (pad % 3 == 0)      display_show_image(diamondCard_bin);
+            else if (pad % 3 == 1) display_show_image(cloverCard_bin);
+            else                   display_show_image(spadeCard_bin);
+            printf("Fart command applied: pad %u\n", (unsigned)(pad + 1));
+        } else if (message.length > 3 && memcmp(message.payload, "ms:", 3) == 0) {
+            char buf[16];
+            size_t n = message.length < sizeof(buf) - 1 ? message.length : sizeof(buf) - 1;
+            memcpy(buf, message.payload, n);
+            buf[n] = '\0';
+            unsigned start = 0, end = 0;
+            if (sscanf(buf + 3, "%u:%u", &start, &end) == 2) {
+                buzzer_play_mario_slice((uint8_t)start, (uint8_t)end);
+                display_show_image(diamondCard_bin);
+                printf("Mario slice applied: notes %u..%u\n", start, end);
+            }
         } else {
             printf("Demo: unrecognised payload on %s (%u bytes).\n",
-                   message.topic, (unsigned)message.length);
+                message.topic, (unsigned)message.length);
         }
     }
     static uint32_t previous_drops;

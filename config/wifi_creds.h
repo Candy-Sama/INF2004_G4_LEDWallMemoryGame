@@ -4,7 +4,7 @@
 //#define WIFI_SSID "SE04_LEDMemoryGameWifi"
 //#define WIFI_PASSWORD "e3sneffpkf"
 
-#define WIFI_SSID "hafi"
-#define WIFI_PASSWORD "peepee67"
+#define WIFI_SSID "Farhah"
+#define WIFI_PASSWORD "farfaawayy"
 
 #endif

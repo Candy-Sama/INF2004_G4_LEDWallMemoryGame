@@ -184,6 +184,13 @@ void game_shared_set_online(GameShared *g, uint8_t node, bool online) {
     xSemaphoreGive(g->lock);
 }
 
+uint8_t game_shared_get_online_mask(GameShared *g) {
+    if (xSemaphoreTake(g->lock, LOCK_TIMEOUT) != pdTRUE) return 0;
+    uint8_t mask = g->online_mask;
+    xSemaphoreGive(g->lock);
+    return mask;
+}
+
 void game_shared_toggle_dj_mode(GameShared *g) {
     if (xSemaphoreTake(g->lock, LOCK_TIMEOUT) != pdTRUE) return;
     g->state.is_dj_mode = !g->state.is_dj_mode;
