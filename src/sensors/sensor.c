@@ -107,20 +107,23 @@ static void sensor_task(void *arg) {
             }
             tap_result_t tap = tap_classifier_update(&classifier, moved, now_ms);
 
-            if (tap == TAP_SINGLE) {
+                        if (tap == TAP_SINGLE) {
                 printf("SINGLE\n");
-
                 app_event_t evt = APP_EVT_MOTION_SINGLE;
                 xQueueSend(sensor_event_q, &evt, 0);
             } else if (tap == TAP_DOUBLE) {
+                printf("DOUBLE sent\n");
                 app_event_t evt = APP_EVT_MOTION_DOUBLE;
                 xQueueSend(sensor_event_q, &evt, 0);
-                printf("DOUBLE ignored\n");
+            } else if (tap == TAP_TRIPLE) {
+                printf("TRIPLE sent\n");
+                app_event_t evt = APP_EVT_MOTION_TRIPLE;
+                xQueueSend(sensor_event_q, &evt, 0);
             }
-        }
+        }                                   // end if (result == IMU_NEW_DATA)
         vTaskDelay(pdMS_TO_TICKS(10));
-    }
-}
+    }                                       // end for (;;)
+}                                           // end sensor_taskdMS_TO_TICKS(10));
 
 QueueHandle_t sensor_get_event_queue(void) { return sensor_event_q; }
 orientation_t sensor_get_orientation(void) { return s_orientation; }

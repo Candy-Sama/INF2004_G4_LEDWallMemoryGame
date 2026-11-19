@@ -34,21 +34,48 @@ static void on_tap(const char *topic, const uint8_t *p, size_t len) {
     (void)topic;
     if ((!s_started && !s_arranging) || len != 1) return;
     
-    // Unpack the 1-byte struct sent by Member 4
-    uint8_t node = p[0] & 0x0F;                         // Lower 4 bits: sender's node ID 1..6
-    uint8_t is_double_tap = (p[0] >> 7) & 0x01;         // Top bit (bit 7): tap type
+    uint8_t node = p[0] & 0x0F;                  
+    uint8_t tap_type = (p[0] >> 6) & 0x03; // Unpack the top 2 bits
     
     if (node < 1 || node > NUM_PANELS) return;
     
-    // Member 5 Rule: Ignore double taps completely
-    if (is_double_tap) {
+    // --- 1. Toggle Mode on Triple Tap from Panel 1 ---
+    if (node == 1 && tap_type == 3) {
+        game_shared_toggle_dj_mode(&game); // You will need to write this tiny mutex function in game_logic.c
+        printf("Switched modes!\n");
+        return;
+    }
+    
+    // --- 2. Filter Double Taps ---
+    if (tap_type == 2) {
         printf("Game Rule: Double tap ignored from panel %d\n", node);
-        return; // Drop the tap here so the game loop never sees it
+        return; 
     }
 
+    // --- 3. DJ Mode Routing ---
+    GameManager snap;
+    game_shared_snapshot(&game, &snap);
+    
+    if (snap.is_dj_mode) {
+        // We are in DJ mode! Play the sound for this specific panel and exit.
+        if (node == 1) buzzer_play(BUZZ_DJ_1);
+        else if (node == 2) buzzer_play(BUZZ_DJ_2);
+        else if (node == 3) buzzer_play(BUZZ_DJ_3);
+        else if (node == 4) buzzer_play(BUZZ_DJ_4);
+        else if (node == 5) buzzer_play(BUZZ_DJ_5);
+        else if (node == 6) buzzer_play(BUZZ_DJ_6);
+        
+        // Hook to Member 1's API: send a fast DJ animation command here too!
+        
+        return; // Do NOT send this tap to the memory game queue
+    }
+
+    // --- 4. Memory Game Routing ---
+    // If we reach here, it's a single tap and we are in Memory Game mode
     tap_evt_t evt = { .panel_id = (uint8_t)(node - 1), .from_node = node };
     xQueueSend(tap_q, &evt, 0);
 }
+
 
 static void on_status(const char *topic, const uint8_t *p, size_t len) {
     const char *s = strstr(topic, "/node");
@@ -156,15 +183,21 @@ static void game_task(void *arg) {
 
         // 4. Handle matches and restarts
         if (snap.current_state == STATE_EVALUATE_MATCH) {
-            
-            // Check if the two selected cards match
             uint8_t card1 = get_card_at_panel(&snap, snap.first_selection);
             uint8_t card2 = get_card_at_panel(&snap, snap.second_selection);
             
-            if (card1 == card2) {
-                buzzer_play(BUZZ_JINGLE); // Match: play good jingle
+            if (card1 == card2) { // It's a match!
+                // Read the profile from the bit-field and play the corresponding jingle
+                if (snap.sound_profile == 0) {
+                    buzzer_play(BUZZ_MATCH_STANDARD); 
+                } else if (snap.sound_profile == 1) {
+                    buzzer_play(BUZZ_MATCH_MARIO);
+                } else if (snap.sound_profile == 2) {
+                    buzzer_play(BUZZ_MATCH_PIANO);
+                }
             } else {
-                buzzer_play(BUZZ_WRONG);  // Mismatch: play bad jingle before turning OFF
+                // NEW: Make sure to buzz when they get it wrong!
+                buzzer_play(BUZZ_WRONG);
             }
 
             // Wait 1 second so the players can see both cards before they flip back
