@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#define START_PANELS   4
+#define START_PANELS   6
 #define START_HOLD_MS  5000
 
 static const uint8_t START_FONT_BIG[5][7] = {

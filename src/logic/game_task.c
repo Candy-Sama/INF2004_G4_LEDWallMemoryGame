@@ -19,17 +19,29 @@
 #define GAME_RESTART_DELAY_MS     5000
 #define GAME_ARRANGE_AT_BOOT      1
 #define GAME_REARRANGE_EACH_ROUND 0
+#define TAP_TIMEOUT_MS            20000
 
-static GameShared       game;
-static QueueHandle_t    tap_q;
-static volatile bool    s_started;
-static volatile bool    s_arranging;
-static volatile bool    s_play_mario_relay;
-static volatile bool    s_use_fart_kit = true;
-static volatile uint8_t s_mario_trigger_node = 1;
+// Display command payloads handled in net.c
+#define ANIM_CMD_MATCH_PULSE  "OFF"
+#define ANIM_CMD_WIN_1        "win"
+#define ANIM_CMD_WIN_2        "OFF"
+#define ANIM_CMD_WIN_3        "win"
+#define ANIM_CMD_GAMEOVER     "lose"
 
+static GameShared          game;
+static QueueHandle_t       tap_q;
+static volatile bool       s_started;
+static volatile bool       s_arranging;
+static volatile bool       s_play_mario_relay;
+static volatile bool       s_use_fart_kit = true;
+static volatile uint8_t    s_mario_trigger_node = 1;
+static volatile TickType_t s_last_tap_tick;
 
-void game_begin(void) { s_started = true; printf("Game: begin\n"); }
+void game_begin(void) {
+    s_last_tap_tick = xTaskGetTickCount();
+    s_started = true;
+    printf("Game: begin\n");
+}
 
 // ---- display & sound helpers ----
 
@@ -40,8 +52,12 @@ static void show_on_node(uint8_t n, const char *payload) {
 }
 
 static void show_on_all(const char *payload) {
+    uint8_t mask = game_shared_get_online_mask(&game);
     for (uint8_t n = 1; n <= NUM_PANELS; n++) {
-        show_on_node(n, payload);
+        if (mask == 0 || (mask & (1u << (n - 1)))) {
+            show_on_node(n, payload);
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
     }
 }
 
@@ -51,7 +67,7 @@ static void play_match_sound_for_profile(uint8_t profile) {
     else if (profile == 2) buzzer_play(BUZZ_MATCH_PIANO);
 }
 
-// Splits the 20s Mario theme equally by duration across all connected nodes
+// Splits the 30s Mario theme equally by duration across all connected nodes
 static void run_mario_relay(void) {
     uint8_t mask = game_shared_get_online_mask(&game);
     uint8_t connected[NUM_PANELS];
@@ -62,14 +78,13 @@ static void run_mario_relay(void) {
             connected[count++] = (uint8_t)(i + 1);
         }
     }
-    // Fallback if status messages haven't arrived yet
     if (count == 0) {
         connected[0] = s_mario_trigger_node;
         count = 1;
     }
 
     uint8_t  total_notes = buzzer_mario_note_count();
-    uint32_t total_ms    = buzzer_mario_slice_ms(0, total_notes); // 20,000 ms
+    uint32_t total_ms    = buzzer_mario_slice_ms(0, total_notes);
     uint8_t  note_idx    = 0;
     uint32_t elapsed_ms  = 0;
 
@@ -100,7 +115,6 @@ static void run_mario_relay(void) {
         printf("Mario Relay: Node %u playing notes %u..%u (%lu ms)\n",
                (unsigned)connected[k], (unsigned)start, (unsigned)note_idx, (unsigned long)slice_ms);
 
-        // Wait for this node's slice to finish before starting the next node
         uint32_t waited = 0;
         while (waited < slice_ms) {
             uint32_t step = (slice_ms - waited > 100) ? 100 : (slice_ms - waited);
@@ -108,8 +122,10 @@ static void run_mario_relay(void) {
             waited += step;
             if (!game_shared_snapshot(&game, &snap) || !snap.is_dj_mode) break;
         }
-        show_on_node(connected[k], "spade"); // restore DJ idle visual after its slice
+        show_on_node(connected[k], s_use_fart_kit ? "spade" : "Clover");
     }
+
+    s_last_tap_tick = xTaskGetTickCount();
 }
 
 // ---- net handlers (run inside net_task: keep tiny, never block) ----
@@ -140,13 +156,14 @@ static void on_tap(const char *topic, const uint8_t *p, size_t len) {
             } else {
                 game_shared_toggle_dj_mode(&game); // Drum Mode -> Memory Game
                 printf("Switched modes! Memory Game mode is now ON\n");
+                s_last_tap_tick = xTaskGetTickCount();
                 show_on_all("OFF");
             }
         }
         return;
     }
-    
-// --- 2. DJ Mode Routing ---
+
+    // --- 2. DJ / Fart Mode Routing ---
     GameManager snap;
     if (game_shared_snapshot(&game, &snap) && snap.is_dj_mode) {
         if (tap_type == 1) {
@@ -158,13 +175,12 @@ static void on_tap(const char *topic, const uint8_t *p, size_t len) {
             };
             show_on_node(node, s_use_fart_kit ? fart_cmds[node - 1] : dj_cmds[node - 1]);
         } else if (tap_type == 2) {
-            // Double tap in DJ mode triggers the 20s Mario relay across connected nodes
             s_mario_trigger_node = node;
             s_play_mario_relay   = true;
         } else if (node == 2 && tap_type == 3) {
-            // Triple tap Panel 2 in DJ mode swaps between Fart Kit and DJ Drum Kit
             s_use_fart_kit = !s_use_fart_kit;
             printf("DJ Sound Kit: %s\n", s_use_fart_kit ? "FART" : "DRUMS");
+            show_on_all(s_use_fart_kit ? "spade" : "Clover");
         }
         return;
     }
@@ -173,10 +189,11 @@ static void on_tap(const char *topic, const uint8_t *p, size_t len) {
     if (node >= 2 && tap_type == 3) {
         uint8_t new_prof = game_shared_cycle_sound_profile(&game);
         play_match_sound_for_profile(new_prof);
+        s_last_tap_tick = xTaskGetTickCount();
         return;
     }
 
-    // --- 4. Memory Game Routing (single taps select, double taps ignored by game_logic) ---
+    // --- 4. Memory Game Routing ---
     if (!s_started && !s_arranging) return;
 
     tap_evt_t evt = {
@@ -194,11 +211,25 @@ static void on_status(const char *topic, const uint8_t *p, size_t len) {
     if (node < 1 || node > NUM_PANELS) return;
     size_t n = strlen(MQTT_STATUS_MESSAGE);
     bool online = (len == n && memcmp(p, MQTT_STATUS_MESSAGE, n) == 0);
-    printf("Presence: node %d %s\n", node, online ? "online" : "offline");
-    game_shared_set_online(&game, (uint8_t)(node - 1), online);
+
+    uint8_t idx = (uint8_t)(node - 1);
+    static TickType_t last_print[NUM_PANELS];
+    static bool printed_once[NUM_PANELS];
+    static bool last_online[NUM_PANELS];
+    TickType_t now = xTaskGetTickCount();
+
+    if (!printed_once[idx] || last_online[idx] != online ||
+        (now - last_print[idx]) >= pdMS_TO_TICKS(30000)) {
+        printf("Presence: node %d %s\n", node, online ? "online" : "offline");
+        last_print[idx]   = now;
+        last_online[idx]  = online;
+        printed_once[idx] = true;
+    }
+
+    game_shared_set_online(&game, idx, online);
 }
 
-// ---- task ----
+// ---- setup & main task ----
 
 static void send_setup(uint8_t op, uint8_t arg) {
     uint8_t msg[2] = { op, arg };
@@ -244,6 +275,8 @@ static void game_task(void *arg) {
 
     uint8_t last_panel_display[NUM_PANELS];
     memset(last_panel_display, 0xFF, sizeof(last_panel_display));
+    GameState prev_state = STATE_INIT_BOARD;
+    s_last_tap_tick = xTaskGetTickCount();
 
     vTaskDelay(pdMS_TO_TICKS(GAME_BOOT_WAIT_MS));
 #if GAME_ARRANGE_AT_BOOT
@@ -258,6 +291,7 @@ static void game_task(void *arg) {
         }
 
         if (xQueueReceive(tap_q, &evt, pdMS_TO_TICKS(100)) == pdTRUE) {
+            s_last_tap_tick = xTaskGetTickCount();
             game_shared_process_tap(&game, evt.panel_id, evt.tap_type);
         }
 
@@ -266,9 +300,46 @@ static void game_task(void *arg) {
 
         if (snap.is_dj_mode) {
             memset(last_panel_display, 0xFF, sizeof(last_panel_display));
+            s_last_tap_tick = xTaskGetTickCount();
+            prev_state = (GameState)snap.current_state;
             continue;
         }
 
+        // --- Game Over / Disconnect Animation Hook ---
+        if (snap.current_state == STATE_PAUSED_DISCONNECT) {
+            if (s_started && prev_state != STATE_PAUSED_DISCONNECT) {
+                printf("Game Event: Node disconnected -> Game Over animation\n");
+                buzzer_play(BUZZ_WRONG);
+                show_on_all(ANIM_CMD_GAMEOVER);
+            }
+            memset(last_panel_display, 0xFF, sizeof(last_panel_display));
+            s_last_tap_tick = xTaskGetTickCount();
+            prev_state = STATE_PAUSED_DISCONNECT;
+            continue;
+        } else if (prev_state == STATE_PAUSED_DISCONNECT) {
+            show_on_all("OFF");
+        }
+
+        // --- Tap Time-Limit Check (while waiting for the 2nd card of a turn) ---
+        if (s_started && snap.current_state == STATE_WAIT_SECOND_CARD) {
+            if ((xTaskGetTickCount() - s_last_tap_tick) >= pdMS_TO_TICKS(TAP_TIMEOUT_MS)) {
+                printf("Game Event: Tap timeout (%lu ms) -> Game Over animation\n",
+                       (unsigned long)TAP_TIMEOUT_MS);
+                s_started = false;
+                buzzer_play(BUZZ_WRONG);
+                show_on_all(ANIM_CMD_GAMEOVER);
+                vTaskDelay(pdMS_TO_TICKS(2000));
+                show_on_all("OFF");
+                game_shared_restart(&game);
+                xQueueReset(tap_q);
+                memset(last_panel_display, 0xFF, sizeof(last_panel_display));
+                prev_state = STATE_INIT_BOARD;
+                begin_round();
+                continue;
+            }
+        }
+
+        // --- Panel LED State Sync ---
         for (uint8_t i = 0; i < NUM_PANELS; i++) {
             bool is_revealed = (snap.matched_bitmask & (1 << i)) ||
                                (snap.first_selection == i) ||
@@ -291,32 +362,46 @@ static void game_task(void *arg) {
             }
         }
 
+        // --- Match Evaluation & Victory Sequence ---
         if (snap.current_state == STATE_EVALUATE_MATCH) {
             uint8_t card1 = get_card_at_panel(&snap, snap.first_selection);
             uint8_t card2 = get_card_at_panel(&snap, snap.second_selection);
 
             if (card1 == card2) {
+                printf("Game Event: Match on panels %u & %u (profile %u)\n",
+                       (unsigned)(snap.first_selection + 1),
+                       (unsigned)(snap.second_selection + 1),
+                       (unsigned)snap.sound_profile);
                 play_match_sound_for_profile(snap.sound_profile);
                 vTaskDelay(pdMS_TO_TICKS(1000));
             } else {
+                printf("Game Event: Mismatch on panels %u & %u\n",
+                       (unsigned)(snap.first_selection + 1),
+                       (unsigned)(snap.second_selection + 1));
                 buzzer_play(BUZZ_WRONG);
-                vTaskDelay(pdMS_TO_TICKS(1000));
+                vTaskDelay(pdMS_TO_TICKS(500));
+                show_on_node(snap.first_selection + 1, ANIM_CMD_GAMEOVER);
+                show_on_node(snap.second_selection + 1, ANIM_CMD_GAMEOVER);
+                vTaskDelay(pdMS_TO_TICKS(500));
             }
 
             game_shared_evaluate(&game);
             xQueueReset(tap_q);
+            s_last_tap_tick = xTaskGetTickCount();
 
         } else if (snap.current_state == STATE_GAME_WON) {
+            printf("Game Event: Win! Playing victory animation\n");
             s_started = false;
-            show_on_all("diamond");
+
+            show_on_all(ANIM_CMD_WIN_1);
+            vTaskDelay(pdMS_TO_TICKS(800));
+            show_on_all(ANIM_CMD_WIN_2);
             vTaskDelay(pdMS_TO_TICKS(500));
-            show_on_all("Clover");
-            vTaskDelay(pdMS_TO_TICKS(500));
-            show_on_all("spade");
-            vTaskDelay(pdMS_TO_TICKS(500));
+            show_on_all(ANIM_CMD_WIN_3);
+            vTaskDelay(pdMS_TO_TICKS(1000));
             show_on_all("OFF");
 
-            vTaskDelay(pdMS_TO_TICKS(GAME_RESTART_DELAY_MS - 1500));
+            vTaskDelay(pdMS_TO_TICKS(2500));
             game_shared_restart(&game);
             xQueueReset(tap_q);
             memset(last_panel_display, 0xFF, sizeof(last_panel_display));
@@ -326,6 +411,8 @@ static void game_task(void *arg) {
 #endif
             begin_round();
         }
+
+        prev_state = (GameState)snap.current_state;
     }
 }
 

@@ -8,9 +8,9 @@
 #include "semphr.h"
 
 #define NUM_PANELS   6
-#define NUM_PAIRS    2        // 4-node test. Set to 3 for the full 6 panels.
-#define NO_SELECTION 7        // used instead of -1 for 3-bit unsigned fields
-#define ALL_ONLINE   0x3F
+#define NUM_PAIRS    3        // 3 pairs = 6 active panels
+#define NO_SELECTION 7        // sentinel for 3-bit unsigned selection fields
+#define ALL_ONLINE   0x3F     // bits 0..5 set (all 6 Picos online)
 
 typedef enum {
     STATE_INIT_BOARD = 0,
@@ -31,7 +31,7 @@ typedef struct {
     uint32_t sound_profile    : 2;   // 0=Standard, 1=Mario, 2=Piano, 3=Silent
     uint32_t is_dj_mode       : 1;   // 0 = memory game, 1 = DJ mode
     uint32_t board_p0 : 2, board_p1 : 2, board_p2 : 2,
-             board_p3 : 2, board_p4 : 2, board_p5 : 2;   // card value per panel
+             board_p3 : 2, board_p4 : 2, board_p5 : 2;   // card value per panel (1..3)
 } GameManager;                       // 3+2+3+3+6+2+1+12 = 32 bits
 
 static_assert(NUM_PAIRS >= 1 && NUM_PAIRS <= 3, "total_matches is 2 bits, cards are 2 bits");
