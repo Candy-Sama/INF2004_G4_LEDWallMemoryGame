@@ -249,6 +249,12 @@ static void apply_received_command(void) {
         } else if (message.length == 3 && memcmp(message.payload, "OFF", 3) == 0) {
             display_show_colour(0, 0, 0);
             printf("LED command applied: OFF\n");
+        } else if (message.length == 3 && memcmp(message.payload, "win", 3) == 0) {
+            display_show_image(winSTAR_bin);
+            printf("LED command applied: winSTAR\n");
+        } else if (message.length == 4 && memcmp(message.payload, "lose", 4) == 0) {
+            display_show_image(loseREJECT_bin);
+            printf("LED command applied: loseREJECT\n");
         } else if (message.length == 3 && memcmp(message.payload, "dj", 2) == 0 &&
                 message.payload[2] >= '1' && message.payload[2] <= '6') {
             uint8_t pad = (uint8_t)(message.payload[2] - '1');
