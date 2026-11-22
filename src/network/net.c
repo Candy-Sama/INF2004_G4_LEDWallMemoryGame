@@ -24,7 +24,7 @@
 
 #define NET_TASK_PRIORITY 2
 #define NET_TASK_STACK    2048
-#define NET_PUB_QUEUE_LEN 8
+#define NET_PUB_QUEUE_LEN 32
 
 // API: the join/registry node is NOT necessarily the game engine node.
 // Keeps Nabillah's original behaviour (identity_is_master). Confirm with her.
@@ -45,6 +45,7 @@ typedef struct {
     uint8_t data[NET_PUB_MAX_PAYLOAD];
     uint8_t len;
     bool    retain;
+    uint8_t retries;
 } net_pub_t;
 
 static net_handler_t s_handlers[NET_MAX_HANDLERS];
@@ -66,8 +67,9 @@ bool net_publish(const char *topic, const void *data, size_t len, bool retain) {
     net_pub_t m;
     strcpy(m.topic, topic);
     if (len) memcpy(m.data, data, len);
-    m.len    = (uint8_t)len;
-    m.retain = retain;
+    m.len     = (uint8_t)len;
+    m.retain  = retain;
+    m.retries = 0;
     return xQueueSend(s_pub_q, &m, 0) == pdTRUE;
 }
 
@@ -102,11 +104,22 @@ static bool dispatch_to_handlers(const mqtt_message_t *msg) {
     return handled;
 }
 
+// Uses QoS 0 so lwIP never stalls waiting for PUBACKs, and paces 3 msgs/tick
 static void drain_publish_queue(void) {
     net_pub_t m;
-    while (xQueueReceive(s_pub_q, &m, 0) == pdTRUE) {
-        if (!mqtt_send_ex(m.topic, m.data, m.len, 1, m.retain, NULL, NULL)) {
-            printf("Net: publish to %s failed.\n", m.topic);
+    uint8_t sent = 0;
+    while (sent < 3 && xQueuePeek(s_pub_q, &m, 0) == pdTRUE) {
+        if (mqtt_send_ex(m.topic, m.data, m.len, 0, m.retain, NULL, NULL)) {
+            xQueueReceive(s_pub_q, &m, 0);
+            sent++;
+        } else {
+            xQueueReceive(s_pub_q, &m, 0);
+            if (++m.retries < 5) {
+                xQueueSendToFront(s_pub_q, &m, 0);
+            } else {
+                printf("Net: publish to %s dropped after retries.\n", m.topic);
+            }
+            break;
         }
     }
 }
@@ -120,7 +133,7 @@ static void send_movement(app_event_t evt) {
 
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
-    // Debounce: ignore rapid physical vibrations under 1.5 s
+    // Debounce: ignore rapid physical vibrations under 1.0 s
     if (last_send_ms != 0 && (now_ms - last_send_ms) < 1000 ) return;
 
     uint8_t tap_val = 0;                              // 1 = single, 2 = double, 3 = triple
@@ -262,9 +275,6 @@ static void apply_received_command(void) {
                 BUZZ_DJ_1, BUZZ_DJ_2, BUZZ_DJ_3, BUZZ_DJ_4, BUZZ_DJ_5, BUZZ_DJ_6
             };
             buzzer_play(dj_sounds[pad]);
-            if (pad % 3 == 0)      display_show_image(diamondCard_bin);
-            else if (pad % 3 == 1) display_show_image(cloverCard_bin);
-            else                   display_show_image(spadeCard_bin);
             printf("DJ command applied: pad %u\n", (unsigned)(pad + 1));
         } else if (message.length == 5 && memcmp(message.payload, "fart", 4) == 0 &&
                 message.payload[4] >= '1' && message.payload[4] <= '6') {
@@ -273,20 +283,46 @@ static void apply_received_command(void) {
                 BUZZ_FART_1, BUZZ_FART_2, BUZZ_FART_3, BUZZ_FART_4, BUZZ_FART_5, BUZZ_FART_6
             };
             buzzer_play(fart_sounds[pad]);
-            if (pad % 3 == 0)      display_show_image(diamondCard_bin);
-            else if (pad % 3 == 1) display_show_image(cloverCard_bin);
-            else                   display_show_image(spadeCard_bin);
             printf("Fart command applied: pad %u\n", (unsigned)(pad + 1));
+        } else if (message.length > 5 && message.length < 32 &&
+                   (memcmp(message.payload, "burst:", 6) == 0 ||
+                    memcmp(message.payload, "tx_out:", 7) == 0 ||
+                    memcmp(message.payload, "tx_pass:", 8) == 0 ||
+                    memcmp(message.payload, "tx_in:", 6) == 0 ||
+                    memcmp(message.payload, "mario_all:", 10) == 0)) {
+            char buf[32];
+            memcpy(buf, message.payload, message.length);
+            buf[message.length] = '\0';
+
+            unsigned a = 0, b = 0, kit = 0;
+            unsigned long total_ms = 30000;
+            char dir = 'R';
+            if (sscanf(buf, "burst:%u:%u", &a, &kit) == 2) {
+                display_anim_burst((uint8_t)a, (uint8_t)kit);
+                printf("Anim applied: burst node %u (kit %u)\n", a, kit);
+            } else if (sscanf(buf, "tx_out:%u:%u:%c", &a, &kit, &dir) == 3) {
+                display_anim_tx_out((uint8_t)a, (uint8_t)kit, dir == 'R');
+                printf("Anim applied: tx_out from %u (kit %u, %c)\n", a, kit, dir);
+            } else if (sscanf(buf, "tx_pass:%u:%u:%c", &a, &kit, &dir) == 3) {
+                display_anim_tx_pass((uint8_t)a, (uint8_t)kit, dir == 'R');
+                printf("Anim applied: tx_pass from %u (kit %u, %c)\n", a, kit, dir);
+            } else if (sscanf(buf, "tx_in:%u:%u:%u:%c", &a, &b, &kit, &dir) == 4) {
+                display_anim_tx_in((uint8_t)a, (uint8_t)b, (uint8_t)kit, dir == 'R');
+                printf("Anim applied: tx_in %u -> %u (kit %u, %c)\n", a, b, kit, dir);
+            } else if (sscanf(buf, "mario_all:%u:%u:%lu", &a, &b, &total_ms) == 3) {
+                display_anim_mario((uint8_t)a, (uint8_t)b, (uint32_t)total_ms);
+                printf("Wide Mario anim applied: slice %u/%u (%lu ms)\n", a + 1, b, total_ms);
+            }
         } else if (message.length > 3 && memcmp(message.payload, "ms:", 3) == 0) {
-            char buf[16];
+            char buf[32];
             size_t n = message.length < sizeof(buf) - 1 ? message.length : sizeof(buf) - 1;
             memcpy(buf, message.payload, n);
             buf[n] = '\0';
+
             unsigned start = 0, end = 0;
             if (sscanf(buf + 3, "%u:%u", &start, &end) == 2) {
                 buzzer_play_mario_slice((uint8_t)start, (uint8_t)end);
-                display_show_image(diamondCard_bin);
-                printf("Mario slice applied: notes %u..%u\n", start, end);
+                printf("Mario audio slice applied: notes %u..%u\n", start, end);
             }
         } else {
             printf("Demo: unrecognised payload on %s (%u bytes).\n",
@@ -305,9 +341,12 @@ static void publish_status(void) {
     static TickType_t next_publish;
     TickType_t now = xTaskGetTickCount();
     if ((int32_t)(now - next_publish) >= 0) {
-        mqtt_send_ex(identity_status_topic(), MQTT_STATUS_MESSAGE,
-                     strlen(MQTT_STATUS_MESSAGE), 1, true, NULL, NULL);
-        next_publish = now + pdMS_TO_TICKS(1000);
+        if (mqtt_send_ex(identity_status_topic(), MQTT_STATUS_MESSAGE,
+                         strlen(MQTT_STATUS_MESSAGE), 0, true, NULL, NULL)) {
+            next_publish = now + pdMS_TO_TICKS(2500);
+        } else {
+            next_publish = now + pdMS_TO_TICKS(500);
+        }
     }
 }
 
