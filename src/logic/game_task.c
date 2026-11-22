@@ -36,6 +36,11 @@ static volatile bool       s_play_mario_relay;
 static volatile bool       s_use_fart_kit = true;
 static volatile uint8_t    s_mario_trigger_node = 1;
 static volatile TickType_t s_last_tap_tick;
+static volatile uint8_t    s_dj_tap_node    = 0;
+static volatile bool       s_dj_tap_pending = false;
+static uint8_t             s_prev_dj_node   = 0;
+static uint8_t             s_node_to_slot[NUM_PANELS] = {0, 1, 2, 3, 4, 5};
+static uint8_t             s_slot_to_node[NUM_PANELS] = {1, 2, 3, 4, 5, 6};
 
 void game_begin(void) {
     s_last_tap_tick = xTaskGetTickCount();
@@ -56,7 +61,7 @@ static void show_on_all(const char *payload) {
     for (uint8_t n = 1; n <= NUM_PANELS; n++) {
         if (mask == 0 || (mask & (1u << (n - 1)))) {
             show_on_node(n, payload);
-            vTaskDelay(pdMS_TO_TICKS(10));
+            vTaskDelay(pdMS_TO_TICKS(15));
         }
     }
 }
@@ -67,15 +72,60 @@ static void play_match_sound_for_profile(uint8_t profile) {
     else if (profile == 2) buzzer_play(BUZZ_MATCH_PIANO);
 }
 
-// Splits the 30s Mario theme equally by duration across all connected nodes
+// Existing DJ/Fart node-to-node color transport animation (unchanged)
+static void run_dj_transport_anim(uint8_t target_node) {
+    char cmd[24];
+    uint8_t kit = s_use_fart_kit ? 1 : 0; // 1 = Fart palette, 0 = DJ palette
+
+    // First tap (or tapping the same panel twice): radial color burst only
+    if (s_prev_dj_node == 0 || s_prev_dj_node == target_node) {
+        snprintf(cmd, sizeof(cmd), "burst:%u:%u", (unsigned)target_node, (unsigned)kit);
+        show_on_node(target_node, cmd);
+        s_prev_dj_node = target_node;
+        return;
+    }
+
+    uint8_t from_node = s_prev_dj_node;
+    int8_t  from_slot = (int8_t)s_node_to_slot[from_node - 1];
+    int8_t  to_slot   = (int8_t)s_node_to_slot[target_node - 1];
+    int8_t  step      = (to_slot > from_slot) ? 1 : -1;
+    char    dir       = (step > 0) ? 'R' : 'L';
+
+    // 1. Sweep color out of the previous panel
+    snprintf(cmd, sizeof(cmd), "tx_out:%u:%u:%c", (unsigned)from_node, (unsigned)kit, dir);
+    show_on_node(from_node, cmd);
+    vTaskDelay(pdMS_TO_TICKS(120));
+
+    // 2. Glide across any intermediate panels in physical slot order
+    for (int8_t s = from_slot + step; s != to_slot; s += step) {
+        GameManager snap;
+        if (!game_shared_snapshot(&game, &snap) || !snap.is_dj_mode) return;
+
+        uint8_t mid_node = s_slot_to_node[s];
+        snprintf(cmd, sizeof(cmd), "tx_pass:%u:%u:%c", (unsigned)from_node, (unsigned)kit, dir);
+        show_on_node(mid_node, cmd);
+        vTaskDelay(pdMS_TO_TICKS(120));
+    }
+
+    // 3. Splash incoming color into target panel and morph into its signature burst
+    snprintf(cmd, sizeof(cmd), "tx_in:%u:%u:%u:%c",
+             (unsigned)from_node, (unsigned)target_node, (unsigned)kit, dir);
+    show_on_node(target_node, cmd);
+
+    s_prev_dj_node = target_node;
+}
+
+// Plays wide-screen Mario animation across ALL connected panels while splitting buzzer audio
 static void run_mario_relay(void) {
     uint8_t mask = game_shared_get_online_mask(&game);
     uint8_t connected[NUM_PANELS];
     uint8_t count = 0;
 
-    for (uint8_t i = 0; i < NUM_PANELS; i++) {
-        if (mask & (1u << i)) {
-            connected[count++] = (uint8_t)(i + 1);
+    // Collect connected nodes in physical left-to-right slot order
+    for (uint8_t slot = 0; slot < NUM_PANELS; slot++) {
+        uint8_t node = s_slot_to_node[slot];
+        if (node >= 1 && node <= NUM_PANELS && (mask & (1u << (node - 1)))) {
+            connected[count++] = node;
         }
     }
     if (count == 0) {
@@ -88,9 +138,19 @@ static void run_mario_relay(void) {
     uint8_t  note_idx    = 0;
     uint32_t elapsed_ms  = 0;
 
-    printf("Mario Relay: splitting %lu ms song across %u connected node(s)\n",
+    printf("Mario Relay: wide-screen animation + %lu ms song across %u node(s)\n",
            (unsigned long)total_ms, (unsigned)count);
 
+    // 1. Start the synchronized wide-screen Super Star animation across ALL connected panels
+    for (uint8_t k = 0; k < count; k++) {
+        char anim_cmd[32];
+        snprintf(anim_cmd, sizeof(anim_cmd), "mario_all:%u:%u:%lu",
+                 (unsigned)k, (unsigned)count, (unsigned long)total_ms);
+        show_on_node(connected[k], anim_cmd);
+        vTaskDelay(pdMS_TO_TICKS(15));
+    }
+
+    // 2. Pass the buzzer melody slice-by-slice across each connected node
     for (uint8_t k = 0; k < count && note_idx < total_notes; k++) {
         GameManager snap;
         if (!game_shared_snapshot(&game, &snap) || !snap.is_dj_mode) break;
@@ -108,9 +168,9 @@ static void run_mario_relay(void) {
         }
 
         uint32_t slice_ms = buzzer_mario_slice_ms(start, note_idx);
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), "ms:%u:%u", (unsigned)start, (unsigned)note_idx);
-        show_on_node(connected[k], cmd);
+        char audio_cmd[16];
+        snprintf(audio_cmd, sizeof(audio_cmd), "ms:%u:%u", (unsigned)start, (unsigned)note_idx);
+        show_on_node(connected[k], audio_cmd);
 
         printf("Mario Relay: Node %u playing notes %u..%u (%lu ms)\n",
                (unsigned)connected[k], (unsigned)start, (unsigned)note_idx, (unsigned long)slice_ms);
@@ -122,10 +182,17 @@ static void run_mario_relay(void) {
             waited += step;
             if (!game_shared_snapshot(&game, &snap) || !snap.is_dj_mode) break;
         }
-        show_on_node(connected[k], s_use_fart_kit ? "spade" : "Clover");
     }
 
-    s_last_tap_tick = xTaskGetTickCount();
+    // 3. Restore active mode icon only if still in DJ/Fart mode
+    GameManager end_snap;
+    if (game_shared_snapshot(&game, &end_snap) && end_snap.is_dj_mode) {
+        show_on_all(s_use_fart_kit ? "spade" : "Clover");
+    }
+
+    s_prev_dj_node   = 0;
+    s_dj_tap_pending = false;
+    s_last_tap_tick  = xTaskGetTickCount();
 }
 
 // ---- net handlers (run inside net_task: keep tiny, never block) ----
@@ -142,6 +209,9 @@ static void on_tap(const char *topic, const uint8_t *p, size_t len) {
     // --- 1. Cycle Memory Game -> Fart Mode -> Drum Mode on Triple Tap from Panel 1 ---
     if (node == 1 && tap_type == 3) {
         s_play_mario_relay = false;
+        s_dj_tap_pending   = false;
+        s_prev_dj_node     = 0;
+
         GameManager s;
         if (game_shared_snapshot(&game, &s)) {
             if (!s.is_dj_mode) {
@@ -174,11 +244,15 @@ static void on_tap(const char *topic, const uint8_t *p, size_t len) {
                 "fart1", "fart2", "fart3", "fart4", "fart5", "fart6"
             };
             show_on_node(node, s_use_fart_kit ? fart_cmds[node - 1] : dj_cmds[node - 1]);
+            s_dj_tap_node    = node;
+            s_dj_tap_pending = true;
         } else if (tap_type == 2) {
             s_mario_trigger_node = node;
             s_play_mario_relay   = true;
         } else if (node == 2 && tap_type == 3) {
-            s_use_fart_kit = !s_use_fart_kit;
+            s_use_fart_kit   = !s_use_fart_kit;
+            s_dj_tap_pending = false;
+            s_prev_dj_node   = 0;
             printf("DJ Sound Kit: %s\n", s_use_fart_kit ? "FART" : "DRUMS");
             show_on_all(s_use_fart_kit ? "spade" : "Clover");
         }
@@ -247,12 +321,19 @@ static void arrange_panels(void) {
             s_play_mario_relay = false;
             run_mario_relay();
         }
+        if (s_dj_tap_pending) {
+            uint8_t target = s_dj_tap_node;
+            s_dj_tap_pending = false;
+            run_dj_transport_anim(target);
+        }
         tap_evt_t evt;
         if (xQueueReceive(tap_q, &evt, pdMS_TO_TICKS(500)) != pdTRUE) continue;
         if (evt.tap_type != 1) continue;
         uint8_t node = evt.from_node;
         if (node > START_PANELS || (placed & (1u << node))) continue;
         placed |= (uint8_t)(1u << node);
+        s_node_to_slot[node - 1] = count;
+        s_slot_to_node[count]    = node;
         send_setup(SETUP_OP_SLOT, (uint8_t)((count << 4) | node));
         printf("Arrange: node %d -> slot %d\n", node, count);
         count++;
@@ -288,6 +369,12 @@ static void game_task(void *arg) {
         if (s_play_mario_relay) {
             s_play_mario_relay = false;
             run_mario_relay();
+        }
+
+        if (s_dj_tap_pending) {
+            uint8_t target = s_dj_tap_node;
+            s_dj_tap_pending = false;
+            run_dj_transport_anim(target);
         }
 
         if (xQueueReceive(tap_q, &evt, pdMS_TO_TICKS(100)) == pdTRUE) {

@@ -8,9 +8,9 @@
 #include "semphr.h"
 
 #define NUM_PANELS   6
-#define NUM_PAIRS    3        // 3 pairs = 6 active panels
+#define NUM_PAIRS    1        // 3 pairs = 6 active panels
 #define NO_SELECTION 7        // sentinel for 3-bit unsigned selection fields
-#define ALL_ONLINE   0x3F     // bits 0..5 set (all 6 Picos online)
+#define ALL_ONLINE   0x03     // bits 0..5 set (all 6 Picos online)
 
 typedef enum {
     STATE_INIT_BOARD = 0,
