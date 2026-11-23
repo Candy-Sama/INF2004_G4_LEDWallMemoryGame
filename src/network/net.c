@@ -22,14 +22,11 @@
 #include "node_registry.h"
 #include "clock_sync.h"
 
-#define NET_TASK_PRIORITY 2
-#define NET_TASK_STACK    2048
-#define NET_PUB_QUEUE_LEN 32
-
-// API: the join/registry node is NOT necessarily the game engine node.
-// Keeps Nabillah's original behaviour (identity_is_master). Confirm with her.
+#define NET_TASK_PRIORITY    2
+#define NET_TASK_STACK       2048
+#define NET_PUB_QUEUE_LEN    32
 #define REGISTRY_MASTER_NODE 1
-#define IS_REGISTRY_MASTER (identity_node_id() == REGISTRY_MASTER_NODE)
+#define IS_REGISTRY_MASTER   (identity_node_id() == REGISTRY_MASTER_NODE)
 
 static QueueHandle_t net_event_q;
 
@@ -73,7 +70,6 @@ bool net_publish(const char *topic, const void *data, size_t len, bool retain) {
     return xQueueSend(s_pub_q, &m, 0) == pdTRUE;
 }
 
-// MQTT filter match: '+' = one level, '#' = the rest.
 static bool topic_matches(const char *f, const char *t) {
     while (*f) {
         if (*f == '#') return true;
@@ -88,7 +84,8 @@ static bool topic_matches(const char *f, const char *t) {
     return *t == '\0';
 }
 
-/* ------------------------------------------------------------ NEW! 12 Nov receive loop */ 
+/* ------------------------------------------------------------ receive loop */
+
 static uint32_t s_rx_us;
 uint32_t net_rx_time_us(void) { return s_rx_us; }
 
@@ -104,7 +101,6 @@ static bool dispatch_to_handlers(const mqtt_message_t *msg) {
     return handled;
 }
 
-// Uses QoS 0 so lwIP never stalls waiting for PUBACKs, and paces 3 msgs/tick
 static void drain_publish_queue(void) {
     net_pub_t m;
     uint8_t sent = 0;
@@ -124,7 +120,7 @@ static void drain_publish_queue(void) {
     }
 }
 
-/* ------------------------------------------------------------ existing code */
+/* ------------------------------------------------------------ sensor tx */
 
 static void send_movement(app_event_t evt) {
     static uint32_t last_send_ms = 0;
@@ -132,24 +128,19 @@ static void send_movement(app_event_t evt) {
     if (!is_wifi_connected() || !is_mqtt_connected()) return;
 
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    if (last_send_ms != 0 && (now_ms - last_send_ms) < 450) return;
 
-    // Debounce: ignore rapid physical vibrations under 1.0 s
-    if (last_send_ms != 0 && (now_ms - last_send_ms) < 1000 ) return;
-
-    uint8_t tap_val = 0;                              // 1 = single, 2 = double, 3 = triple
+    uint8_t tap_val = 0;
     if (evt == APP_EVT_MOTION_SINGLE)      tap_val = 1;
     else if (evt == APP_EVT_MOTION_DOUBLE) tap_val = 2;
     else if (evt == APP_EVT_MOTION_TRIPLE) tap_val = 3;
     else return;
 
-    // Payload: bits 0-3 node ID, bits 4-5 free, bits 6-7 tap type
     uint8_t payload = (uint8_t)((identity_node_id() & 0x0F) | ((tap_val & 0x03) << 6));
     if (net_publish(MQTT_TAP_TOPIC, &payload, 1, false)) {
         last_send_ms = now_ms;
         printf("[%lu ms] Movement: tap type %u sent to Game Master\n",
                (unsigned long)now_ms, (unsigned)tap_val);
-    } else {
-        printf("Movement: publish failed\n");
     }
 }
 
@@ -164,15 +155,14 @@ static void handle_sensor_events(void) {
     }
 }
 
-/* ---------------------------------------------- Nabillah: join / registry */
+/* ---------------------------------------------- join / registry */
 
-static bool is_board_id_text(const char *s) {            // exactly 16 hex chars
+static bool is_board_id_text(const char *s) {
     if (strlen(s) != IDENTITY_BOARD_ID_LEN - 1) return false;
     for (size_t i = 0; s[i]; ++i) if (!isxdigit((unsigned char)s[i])) return false;
     return true;
 }
 
-// Master: a board without a number asked to join. Reply with its number.
 static void handle_join_request(const mqtt_message_t *message) {
     if (message->length != IDENTITY_BOARD_ID_LEN - 1) return;
     char board_id[IDENTITY_BOARD_ID_LEN];
@@ -189,13 +179,9 @@ static void handle_join_request(const mqtt_message_t *message) {
     int n = snprintf(reply, sizeof reply, "%d", node_id);
     if (mqtt_send(reply_topic, reply, (size_t)n)) {
         printf("Join: %s -> node %d\n", board_id, node_id);
-    } else {
-        printf("Join: reply to %s failed; it will retry.\n", board_id);
     }
 }
 
-// Unassigned board: ask the master for a number, blocking until one arrives.
-// Uses a temporary MQTT session with NO Last Will (the will topic needs a node number).
 static void join_grid(const char *client_id) {
     if (!mqtt_subscribe_topic(identity_assign_topic())) {
         printf("Could not register the assign topic.\n");
@@ -238,7 +224,86 @@ static void join_grid(const char *client_id) {
     mqtt_reset_connection();
 }
 
-/* ------------------------------------------------------------ receive loop */
+/* ------------------------------------------------------------ command dispatch */
+
+static void execute_node_command(const char *buf, size_t len) {
+    typedef struct {
+        const char    *name;
+        uint8_t        name_len;
+        const uint8_t *sprite;
+    } sprite_cmd_t;
+
+    static const sprite_cmd_t sprite_cmds[] = {
+        { "diamond", 7, diamondCard_bin },
+        { "Clover",  6, cloverCard_bin  },
+        { "spade",   5, spadeCard_bin   },
+        { "win",     3, winSTAR_bin     },
+        { "lose",    4, loseREJECT_bin  }
+    };
+
+    if (len == 3 && memcmp(buf, "OFF", 3) == 0) {
+        display_show_colour(0, 0, 0);
+        return;
+    }
+
+    if (len == 4 && memcmp(buf, "stop", 4) == 0) {
+        buzzer_stop();
+        return;
+    }
+
+    for (size_t i = 0; i < sizeof(sprite_cmds) / sizeof(sprite_cmds[0]); i++) {
+        if (len == sprite_cmds[i].name_len &&
+            memcmp(buf, sprite_cmds[i].name, sprite_cmds[i].name_len) == 0) {
+            display_show_image(sprite_cmds[i].sprite);
+            return;
+        }
+    }
+
+    if (len == 3 && memcmp(buf, "dj", 2) == 0 && buf[2] >= '1' && buf[2] <= '6') {
+        static const buzz_id_t dj_sounds[6] = {
+            BUZZ_DJ_1, BUZZ_DJ_2, BUZZ_DJ_3, BUZZ_DJ_4, BUZZ_DJ_5, BUZZ_DJ_6
+        };
+        buzzer_play(dj_sounds[buf[2] - '1']);
+        return;
+    }
+
+    if (len == 5 && memcmp(buf, "fart", 4) == 0 && buf[4] >= '1' && buf[4] <= '6') {
+        static const buzz_id_t fart_sounds[6] = {
+            BUZZ_FART_1, BUZZ_FART_2, BUZZ_FART_3, BUZZ_FART_4, BUZZ_FART_5, BUZZ_FART_6
+        };
+        buzzer_play(fart_sounds[buf[4] - '1']);
+        return;
+    }
+
+    unsigned a = 0, b = 0, kit = 0;
+    unsigned long total_ms = 30000, delay_ms = 0;
+    char dir = 'R', extra = '\0';
+
+    if (sscanf(buf, "burst:%u:%u%c", &a, &kit, &extra) == 2 && a >= 1 && a <= NUM_PANELS && kit <= 1) {
+        display_anim_burst((uint8_t)a, (uint8_t)kit);
+    } else if (sscanf(buf, "tx_out:%u:%u:%c%c", &a, &kit, &dir, &extra) == 3 &&
+               a >= 1 && a <= NUM_PANELS && kit <= 1 && (dir == 'R' || dir == 'L')) {
+        display_anim_tx_out((uint8_t)a, (uint8_t)kit, dir == 'R');
+    } else if (sscanf(buf, "tx_pass:%u:%u:%c%c", &a, &kit, &dir, &extra) == 3 &&
+               a >= 1 && a <= NUM_PANELS && kit <= 1 && (dir == 'R' || dir == 'L')) {
+        display_anim_tx_pass((uint8_t)a, (uint8_t)kit, dir == 'R');
+    } else if (sscanf(buf, "tx_in:%u:%u:%u:%c%c", &a, &b, &kit, &dir, &extra) == 4 &&
+               a >= 1 && a <= NUM_PANELS && b >= 1 && b <= NUM_PANELS &&
+               kit <= 1 && (dir == 'R' || dir == 'L')) {
+        display_anim_tx_in((uint8_t)a, (uint8_t)b, (uint8_t)kit, dir == 'R');
+    } else if (sscanf(buf, "mario_all:%u:%u:%lu%c", &a, &b, &total_ms, &extra) == 3 &&
+               b >= 1 && b <= NUM_PANELS && a < b) {
+        display_anim_mario((uint8_t)a, (uint8_t)b, (uint32_t)total_ms);
+    } else if (sscanf(buf, "ms:%u:%u:%lu%c", &a, &b, &delay_ms, &extra) == 3 &&
+               a < b && b <= 255) {
+        buzzer_play_mario_slice_delayed((uint8_t)a, (uint8_t)b, (uint32_t)delay_ms);
+    } else if (sscanf(buf, "ms:%u:%u%c", &a, &b, &extra) == 2 &&
+               a < b && b <= 255) {
+        buzzer_play_mario_slice_delayed((uint8_t)a, (uint8_t)b, 0);
+    } else {
+        printf("Net: unrecognised command '%s'\n", buf);
+    }
+}
 
 static void apply_received_command(void) {
     mqtt_message_t message;
@@ -247,88 +312,16 @@ static void apply_received_command(void) {
             handle_join_request(&message);
             continue;
         }
-
-        if (dispatch_to_handlers(&message)) continue;          // API: game, setup, ...
+        if (dispatch_to_handlers(&message)) continue;
         if (strcmp(message.topic, identity_command_topic()) != 0) continue;
-        if (message.length == 7 && memcmp(message.payload, "diamond", 7) == 0) {
-            display_show_image(diamondCard_bin);
-            printf("LED command applied: Diamond\n");
-        } else if (message.length == 6 && memcmp(message.payload, "Clover", 6) == 0) {
-            display_show_image(cloverCard_bin);
-            printf("LED command applied: Clover\n");
-        } else if (message.length == 5 && memcmp(message.payload, "spade", 5) == 0) {
-            display_show_image(spadeCard_bin);
-            printf("LED command applied: Spade\n");
-        } else if (message.length == 3 && memcmp(message.payload, "OFF", 3) == 0) {
-            display_show_colour(0, 0, 0);
-            printf("LED command applied: OFF\n");
-        } else if (message.length == 3 && memcmp(message.payload, "win", 3) == 0) {
-            display_show_image(winSTAR_bin);
-            printf("LED command applied: winSTAR\n");
-        } else if (message.length == 4 && memcmp(message.payload, "lose", 4) == 0) {
-            display_show_image(loseREJECT_bin);
-            printf("LED command applied: loseREJECT\n");
-        } else if (message.length == 3 && memcmp(message.payload, "dj", 2) == 0 &&
-                message.payload[2] >= '1' && message.payload[2] <= '6') {
-            uint8_t pad = (uint8_t)(message.payload[2] - '1');
-            static const buzz_id_t dj_sounds[6] = {
-                BUZZ_DJ_1, BUZZ_DJ_2, BUZZ_DJ_3, BUZZ_DJ_4, BUZZ_DJ_5, BUZZ_DJ_6
-            };
-            buzzer_play(dj_sounds[pad]);
-            printf("DJ command applied: pad %u\n", (unsigned)(pad + 1));
-        } else if (message.length == 5 && memcmp(message.payload, "fart", 4) == 0 &&
-                message.payload[4] >= '1' && message.payload[4] <= '6') {
-            uint8_t pad = (uint8_t)(message.payload[4] - '1');
-            static const buzz_id_t fart_sounds[6] = {
-                BUZZ_FART_1, BUZZ_FART_2, BUZZ_FART_3, BUZZ_FART_4, BUZZ_FART_5, BUZZ_FART_6
-            };
-            buzzer_play(fart_sounds[pad]);
-            printf("Fart command applied: pad %u\n", (unsigned)(pad + 1));
-        } else if (message.length > 5 && message.length < 32 &&
-                   (memcmp(message.payload, "burst:", 6) == 0 ||
-                    memcmp(message.payload, "tx_out:", 7) == 0 ||
-                    memcmp(message.payload, "tx_pass:", 8) == 0 ||
-                    memcmp(message.payload, "tx_in:", 6) == 0 ||
-                    memcmp(message.payload, "mario_all:", 10) == 0)) {
-            char buf[32];
-            memcpy(buf, message.payload, message.length);
-            buf[message.length] = '\0';
 
-            unsigned a = 0, b = 0, kit = 0;
-            unsigned long total_ms = 30000;
-            char dir = 'R';
-            if (sscanf(buf, "burst:%u:%u", &a, &kit) == 2) {
-                display_anim_burst((uint8_t)a, (uint8_t)kit);
-                printf("Anim applied: burst node %u (kit %u)\n", a, kit);
-            } else if (sscanf(buf, "tx_out:%u:%u:%c", &a, &kit, &dir) == 3) {
-                display_anim_tx_out((uint8_t)a, (uint8_t)kit, dir == 'R');
-                printf("Anim applied: tx_out from %u (kit %u, %c)\n", a, kit, dir);
-            } else if (sscanf(buf, "tx_pass:%u:%u:%c", &a, &kit, &dir) == 3) {
-                display_anim_tx_pass((uint8_t)a, (uint8_t)kit, dir == 'R');
-                printf("Anim applied: tx_pass from %u (kit %u, %c)\n", a, kit, dir);
-            } else if (sscanf(buf, "tx_in:%u:%u:%u:%c", &a, &b, &kit, &dir) == 4) {
-                display_anim_tx_in((uint8_t)a, (uint8_t)b, (uint8_t)kit, dir == 'R');
-                printf("Anim applied: tx_in %u -> %u (kit %u, %c)\n", a, b, kit, dir);
-            } else if (sscanf(buf, "mario_all:%u:%u:%lu", &a, &b, &total_ms) == 3) {
-                display_anim_mario((uint8_t)a, (uint8_t)b, (uint32_t)total_ms);
-                printf("Wide Mario anim applied: slice %u/%u (%lu ms)\n", a + 1, b, total_ms);
-            }
-        } else if (message.length > 3 && memcmp(message.payload, "ms:", 3) == 0) {
-            char buf[32];
-            size_t n = message.length < sizeof(buf) - 1 ? message.length : sizeof(buf) - 1;
-            memcpy(buf, message.payload, n);
-            buf[n] = '\0';
-
-            unsigned start = 0, end = 0;
-            if (sscanf(buf + 3, "%u:%u", &start, &end) == 2) {
-                buzzer_play_mario_slice((uint8_t)start, (uint8_t)end);
-                printf("Mario audio slice applied: notes %u..%u\n", start, end);
-            }
-        } else {
-            printf("Demo: unrecognised payload on %s (%u bytes).\n",
-                message.topic, (unsigned)message.length);
-        }
+        char buf[32];
+        size_t n = (message.length < sizeof(buf) - 1) ? message.length : (sizeof(buf) - 1);
+        memcpy(buf, message.payload, n);
+        buf[n] = '\0';
+        execute_node_command(buf, n);
     }
+
     static uint32_t previous_drops;
     uint32_t drops = mqtt_received_drop_count();
     if (drops != previous_drops) {
@@ -350,10 +343,6 @@ static void publish_status(void) {
     }
 }
 
-static void report_wifi_status(bool connected) {
-    printf("Wi-Fi %s.\n", connected ? "connected" : "disconnected");
-}
-
 static void net_task(void *arg) {
     (void)arg;
 
@@ -368,24 +357,16 @@ static void net_task(void *arg) {
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
 
-    if (!identity_is_assigned()) join_grid(client_id);   // blocks until we have a number
-    if (IS_REGISTRY_MASTER) registry_init();             // master seeds the registry
+    if (!identity_is_assigned()) join_grid(client_id);
+    if (IS_REGISTRY_MASTER) registry_init();
 
-    if (!mqtt_configure_will(identity_status_topic(), "offline", 10)) {
-        printf("Could not configure MQTT Last Will.\n");
-        vTaskDelete(NULL);
-    }
-    if (!mqtt_subscribe_topic(identity_command_topic())) {
-        printf("Could not register the command topic.\n");
-        vTaskDelete(NULL);
-    }
-
-    if (IS_REGISTRY_MASTER && !mqtt_subscribe_topic(MQTT_JOIN_TOPIC)) {
-        printf("Could not register the join topic.\n");
+    if (!mqtt_configure_will(identity_status_topic(), "offline", 10) ||
+        !mqtt_subscribe_topic(identity_command_topic()) ||
+        (IS_REGISTRY_MASTER && !mqtt_subscribe_topic(MQTT_JOIN_TOPIC))) {
+        printf("MQTT topic registration failed.\n");
         vTaskDelete(NULL);
     }
 
-    // API: subscribe once for every module that registered a handler.
     for (size_t i = 0; i < s_handler_count; i++) {
         if (!mqtt_subscribe_topic(s_handlers[i].filter)) {
             printf("Could not register %s.\n", s_handlers[i].filter);
@@ -401,7 +382,7 @@ static void net_task(void *arg) {
     for (;;) {
         bool wifi_connected = is_wifi_connected();
         if (wifi_connected != wifi_was_connected) {
-            report_wifi_status(wifi_connected);
+            printf("Wi-Fi %s.\n", wifi_connected ? "connected" : "disconnected");
             if (!wifi_connected) {
                 mqtt_reset_connection();
                 mqtt_was_ready = false;
@@ -413,12 +394,10 @@ static void net_task(void *arg) {
         if (!wifi_connected) {
             TickType_t now = xTaskGetTickCount();
             if ((int32_t)(now - next_wifi_retry) >= 0) {
-                printf("Attempting Wi-Fi reconnection...\n");
-                bool reconnected = wifi_init_and_connect(WIFI_SSID, WIFI_PASSWORD);
+                wifi_init_and_connect(WIFI_SSID, WIFI_PASSWORD);
                 next_wifi_retry = xTaskGetTickCount() + pdMS_TO_TICKS(5000);
                 xQueueReset(net_event_q);
-                xQueueReset(s_pub_q);                           // API: drop stale publishes
-                if (!reconnected) printf("Wi-Fi retry failed. Waiting 5 seconds.\n");
+                xQueueReset(s_pub_q);
             }
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
@@ -442,11 +421,11 @@ static void net_task(void *arg) {
 
             apply_received_command();
             publish_status();
-            clock_sync_poll();                                  // clock master: stamp + send tick
-            drain_publish_queue();                              // API
+            clock_sync_poll();
+            drain_publish_queue();
         } else {
             xQueueReset(net_event_q);
-            xQueueReset(s_pub_q);                               // API: no stale replay
+            xQueueReset(s_pub_q);
         }
 
         mqtt_was_ready = mqtt_ready;
@@ -456,7 +435,7 @@ static void net_task(void *arg) {
 
 bool net_start(void) {
     net_event_q = sensor_get_event_queue();
-    s_pub_q = xQueueCreate(NET_PUB_QUEUE_LEN, sizeof(net_pub_t));   // API
+    s_pub_q = xQueueCreate(NET_PUB_QUEUE_LEN, sizeof(net_pub_t));
     if (!net_event_q || !s_pub_q) return false;
     return xTaskCreate(net_task, "net", NET_TASK_STACK, NULL, NET_TASK_PRIORITY, NULL) == pdPASS;
 }

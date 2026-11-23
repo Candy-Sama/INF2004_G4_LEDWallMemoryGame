@@ -105,7 +105,7 @@ static const note_t MARIO_THEME[] = {
 #define COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
 typedef struct { buzz_id_t id; const note_t *notes; size_t count; } sound_t;
-typedef struct { uint8_t id; uint8_t start; uint8_t end; } buzz_req_t;
+typedef struct { uint8_t id; uint8_t start; uint8_t end; uint32_t delay_ms; } buzz_req_t;
 
 static const sound_t SOUNDS[] = {
     { BUZZ_JINGLE,         JINGLE,           COUNT(JINGLE) },
@@ -129,6 +129,8 @@ static const sound_t SOUNDS[] = {
 
 static QueueHandle_t buzz_q;
 static uint slice;
+static volatile bool s_pwm_ready    = false;
+static volatile bool s_buzzer_abort = false;
 
 uint8_t buzzer_mario_note_count(void) {
     return (uint8_t)COUNT(MARIO_THEME);
@@ -146,6 +148,7 @@ uint32_t buzzer_mario_slice_ms(uint8_t start_idx, uint8_t end_idx) {
 }
 
 static void tone(uint16_t hz) {
+    if (!s_pwm_ready) return;
     if (hz == 0) { pwm_set_gpio_level(BUZZER_PIN, 0); return; }
     uint32_t wrap = 1000000u / hz - 1;               // 1 MHz PWM clock
     pwm_set_wrap(slice, (uint16_t)wrap);
@@ -154,10 +157,16 @@ static void tone(uint16_t hz) {
 
 static void play(const note_t *n, size_t count) {
     for (size_t i = 0; i < count; i++) {
+        if (s_buzzer_abort) break;
         tone(n[i].hz);
-        TickType_t ticks = pdMS_TO_TICKS(n[i].ms);
-        if (ticks == 0 && n[i].ms > 0) ticks = 1;
-        vTaskDelay(ticks);
+        uint32_t rem = n[i].ms;
+        while (rem > 0 && !s_buzzer_abort) {
+            uint32_t step = (rem > 25) ? 25 : rem;
+            TickType_t ticks = pdMS_TO_TICKS(step);
+            if (ticks == 0) ticks = 1;
+            vTaskDelay(ticks);
+            rem -= step;
+        }
     }
     tone(0);
 }
@@ -168,11 +177,20 @@ static void buzzer_task(void *arg) {
     slice = pwm_gpio_to_slice_num(BUZZER_PIN);
     pwm_set_clkdiv(slice, (float)clock_get_hz(clk_sys) / 1000000.0f);
     pwm_set_enabled(slice, true);
+    s_pwm_ready = true;
     tone(0);
 
     buzz_req_t req;
     for (;;) {
         if (xQueueReceive(buzz_q, &req, portMAX_DELAY) != pdTRUE) continue;
+
+        if (req.delay_ms > 0) {
+            TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(req.delay_ms);
+            while (!s_buzzer_abort && (int32_t)(deadline - xTaskGetTickCount()) > 0) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+        }
+        if (s_buzzer_abort) continue;
 
         if (req.id == BUZZ_MARIO_SLICE) {
             uint8_t total = (uint8_t)COUNT(MARIO_THEME);
@@ -193,13 +211,30 @@ static void buzzer_task(void *arg) {
     }
 }
 
+void buzzer_stop(void) {
+    s_buzzer_abort = true;
+    if (buzz_q) xQueueReset(buzz_q);
+    tone(0);
+}
+
 void buzzer_play(buzz_id_t id) {
-    buzz_req_t req = { .id = (uint8_t)id, .start = 0, .end = 0 };
+    s_buzzer_abort = false;
+    buzz_req_t req = { .id = (uint8_t)id, .start = 0, .end = 0, .delay_ms = 0 };
     if (buzz_q) xQueueSend(buzz_q, &req, 0);
 }
 
 void buzzer_play_mario_slice(uint8_t start_idx, uint8_t end_idx) {
-    buzz_req_t req = { .id = (uint8_t)BUZZ_MARIO_SLICE, .start = start_idx, .end = end_idx };
+    buzzer_play_mario_slice_delayed(start_idx, end_idx, 0);
+}
+
+void buzzer_play_mario_slice_delayed(uint8_t start_idx, uint8_t end_idx, uint32_t delay_ms) {
+    s_buzzer_abort = false;
+    buzz_req_t req = {
+        .id       = (uint8_t)BUZZ_MARIO_SLICE,
+        .start    = start_idx,
+        .end      = end_idx,
+        .delay_ms = delay_ms
+    };
     if (buzz_q) xQueueSend(buzz_q, &req, 0);
 }
 
