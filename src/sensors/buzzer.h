@@ -30,3 +30,5 @@ void     buzzer_play(buzz_id_t id);
 void     buzzer_play_mario_slice(uint8_t start_idx, uint8_t end_idx);
 uint8_t  buzzer_mario_note_count(void);
 uint32_t buzzer_mario_slice_ms(uint8_t start_idx, uint8_t end_idx);
+void buzzer_play_mario_slice_delayed(uint8_t start, uint8_t end, uint32_t delay_ms);
+void buzzer_stop(void);

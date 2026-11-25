@@ -1,9 +1,17 @@
 #include "game_logic.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include "pico/time.h"
 
-#define LOCK_TIMEOUT  pdMS_TO_TICKS(50)
-#define ACTIVE_PANELS (NUM_PAIRS * 3)
+#define LOCK_TIMEOUT pdMS_TO_TICKS(50)
+
+static uint8_t count_online_bits(uint8_t mask) {
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < NUM_PANELS; i++) {
+        if (mask & (1u << i)) count++;
+    }
+    return count;
+}
 
 /* ---------------- pure game logic (no RTOS, call with lock held) ---------------- */
 
@@ -31,13 +39,13 @@ uint8_t get_card_at_panel(const GameManager *game, uint8_t panel_id) {
     }
 }
 
-// Deals NUM_PAIRS pairs (values 1..NUM_PAIRS) onto the active panels.
+// Deals NUM_PAIRS pairs (values 1..NUM_PAIRS) onto active slots 0..ACTIVE_PANELS-1.
 void game_shuffle_board(GameManager *game) {
     uint8_t deck[ACTIVE_PANELS];
     for (int i = 0; i < ACTIVE_PANELS; i++) {
         deck[i] = (uint8_t)(i / 2 + 1);
     }
-    for (int i = ACTIVE_PANELS - 1; i > 0; i--) {          // Fisher-Yates shuffle
+    for (int i = ACTIVE_PANELS - 1; i > 0; i--) {
         int j = rand() % (i + 1);
         uint8_t t = deck[i];
         deck[i] = deck[j];
@@ -48,7 +56,7 @@ void game_shuffle_board(GameManager *game) {
     }
     game->matched_bitmask = 0;
     for (uint8_t p = ACTIVE_PANELS; p < NUM_PANELS; p++) {
-        game->matched_bitmask |= (1u << p);                 // lock any unused panels
+        game->matched_bitmask |= (1u << p);
     }
 }
 
@@ -61,9 +69,10 @@ void game_init(GameManager *game) {
 }
 
 bool game_process_input(GameManager *game, uint8_t panel_id) {
-    if (panel_id >= NUM_PANELS) return false;
+    if (panel_id >= ACTIVE_PANELS) return false;
     if (game->current_state == STATE_PAUSED_DISCONNECT ||
-        game->current_state == STATE_GAME_WON) return false;
+        game->current_state == STATE_GAME_WON ||
+        game->current_state == STATE_EVALUATE_MATCH) return false;
     if (game->matched_bitmask & (1u << panel_id)) return false;
 
     if (game->current_state == STATE_WAIT_FIRST_CARD) {
@@ -72,7 +81,7 @@ bool game_process_input(GameManager *game, uint8_t panel_id) {
         return true;
     }
     if (game->current_state == STATE_WAIT_SECOND_CARD) {
-        if (panel_id == game->first_selection) return false;   // same card rejected
+        if (panel_id == game->first_selection) return false;
         game->second_selection = panel_id;
         game->current_state    = STATE_EVALUATE_MATCH;
         return true;
@@ -80,15 +89,10 @@ bool game_process_input(GameManager *game, uint8_t panel_id) {
     return false;
 }
 
-// Rule definition: Single tap (1) selects a card; Double tap (2) is ignored.
 bool game_process_tap(GameManager *game, uint8_t panel_id, uint8_t tap_type) {
-    if (tap_type == 2) {
-        printf("Game Rule: Double tap ignored on panel %u\n", (unsigned)(panel_id + 1));
-        return false;
-    }
     if (tap_type == 1) {
         bool ok = game_process_input(game, panel_id);
-        printf("Game Rule: Single tap on panel %u -> %s\n",
+        printf("Game Rule: Single tap on slot %u -> %s\n",
                (unsigned)(panel_id + 1), ok ? "card selected" : "rejected");
         return ok;
     }
@@ -100,7 +104,7 @@ void game_evaluate_match(GameManager *game) {
     uint8_t card1 = get_card_at_panel(game, game->first_selection);
     uint8_t card2 = get_card_at_panel(game, game->second_selection);
 
-    if (card1 == card2) {
+    if (card1 == card2 && card1 != 0) {
         game->matched_bitmask |= (1u << game->first_selection);
         game->matched_bitmask |= (1u << game->second_selection);
         game->total_matches   += 1;
@@ -119,11 +123,12 @@ void game_evaluate_match(GameManager *game) {
 bool game_shared_init(GameShared *g) {
     g->lock = xSemaphoreCreateMutex();
     if (!g->lock) return false;
+    srand((unsigned int)to_us_since_boot(get_absolute_time()));
     g->online_mask         = 0;
     g->state.sound_profile = 0;
     g->state.is_dj_mode    = 0;
     game_init(&g->state);
-    g->state.current_state = STATE_PAUSED_DISCONNECT;      // wait for all 6 nodes
+    g->state.current_state = STATE_PAUSED_DISCONNECT;
     return true;
 }
 
@@ -133,13 +138,13 @@ bool game_shared_process_input(GameShared *g, uint8_t panel_id) {
 
 bool game_shared_process_tap(GameShared *g, uint8_t panel_id, uint8_t tap_type) {
     if (xSemaphoreTake(g->lock, LOCK_TIMEOUT) != pdTRUE) {
-        printf("MUTEX: timeout (tap %u)\n", panel_id);
+        printf("MUTEX: timeout (slot %u)\n", (unsigned)(panel_id + 1));
         return false;
     }
-    printf("MUTEX: taken (panel %u, type %u)\n", panel_id + 1, tap_type);
+    printf("MUTEX: taken (slot %u, type %u)\n", (unsigned)(panel_id + 1), (unsigned)tap_type);
     bool ok = game_process_tap(&g->state, panel_id, tap_type);
     xSemaphoreGive(g->lock);
-    printf("MUTEX: given (panel %u)%s\n", panel_id + 1, ok ? "" : " [ignored/rejected]");
+    printf("MUTEX: given (slot %u)%s\n", (unsigned)(panel_id + 1), ok ? "" : " [ignored/rejected]");
     return ok;
 }
 
@@ -159,12 +164,25 @@ bool game_shared_snapshot(GameShared *g, GameManager *out) {
 
 bool game_shared_restart(GameShared *g) {
     if (xSemaphoreTake(g->lock, LOCK_TIMEOUT) != pdTRUE) return false;
-    game_init(&g->state);                                  // keeps sound_profile & is_dj_mode
-    if (g->online_mask != ALL_ONLINE) {                    // stay paused if any node is missing
+    srand((unsigned int)to_us_since_boot(get_absolute_time()));
+    game_init(&g->state);
+    if (count_online_bits(g->online_mask) < ACTIVE_PANELS) {
         g->state.current_state = STATE_PAUSED_DISCONNECT;
     }
     xSemaphoreGive(g->lock);
     return true;
+}
+
+void game_shared_clear_selection(GameShared *g) {
+    if (xSemaphoreTake(g->lock, LOCK_TIMEOUT) != pdTRUE) return;
+    GameManager *s = &g->state;
+    if (s->current_state == STATE_WAIT_SECOND_CARD ||
+        s->current_state == STATE_EVALUATE_MATCH) {
+        s->first_selection  = NO_SELECTION;
+        s->second_selection = NO_SELECTION;
+        s->current_state    = STATE_WAIT_FIRST_CARD;
+    }
+    xSemaphoreGive(g->lock);
 }
 
 void game_shared_set_online(GameShared *g, uint8_t node, bool online) {
@@ -174,10 +192,10 @@ void game_shared_set_online(GameShared *g, uint8_t node, bool online) {
     else        g->online_mask &= ~(1u << node);
 
     GameManager *s = &g->state;
-    if (g->online_mask != ALL_ONLINE) {
+    if (count_online_bits(g->online_mask) < ACTIVE_PANELS) {
         if (s->current_state != STATE_PAUSED_DISCONNECT &&
             s->current_state != STATE_GAME_WON) {
-            s->first_selection  = NO_SELECTION;            // drop a half-made turn
+            s->first_selection  = NO_SELECTION;
             s->second_selection = NO_SELECTION;
             s->current_state    = STATE_PAUSED_DISCONNECT;
         }
@@ -192,6 +210,10 @@ uint8_t game_shared_get_online_mask(GameShared *g) {
     uint8_t mask = g->online_mask;
     xSemaphoreGive(g->lock);
     return mask;
+}
+
+uint8_t game_shared_online_count(GameShared *g) {
+    return count_online_bits(game_shared_get_online_mask(g));
 }
 
 void game_shared_toggle_dj_mode(GameShared *g) {
