@@ -93,18 +93,9 @@ static void play_match_sound_for_profile(uint8_t profile) {
     else if (profile == 2) buzzer_play(BUZZ_MATCH_PIANO);
 }
 
-// ---- non-blocking Mario relay control ----
-
-static void stop_mario_relay(void) {
-    if (!s_mario_active) return;
-    s_mario_active = false;
-    show_on_active_slots("stop");
-    printf("Mario Relay: stopped remote audio\n");
-}
+// ---- non-interruptible Mario relay control ----
 
 static void start_mario_relay(uint8_t trigger_node) {
-    stop_mario_relay();
-
     uint8_t mask = game_shared_get_online_mask(&game);
     uint8_t connected[ACTIVE_PANELS];
     uint8_t count = 0;
@@ -125,19 +116,10 @@ static void start_mario_relay(uint8_t trigger_node) {
     uint8_t  note_idx    = 0;
     uint32_t elapsed_ms  = 0;
 
-    printf("Mario Relay: upfront schedule (%lu ms) across %u online slot(s)\n",
+    printf("Mario Relay: locked playback (%lu ms) across %u online slot(s)\n",
            (unsigned long)total_ms, (unsigned)count);
 
-    // 1. Trigger wide-screen animation on all connected panels
-    for (uint8_t k = 0; k < count; k++) {
-        char anim_cmd[32];
-        snprintf(anim_cmd, sizeof(anim_cmd), "mario_all:%u:%u:%lu",
-                 (unsigned)k, (unsigned)count, (unsigned long)total_ms);
-        show_on_node(connected[k], anim_cmd);
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-
-    // 2. Schedule all audio slices upfront with exact start offsets (immune to Wi-Fi jitter)
+    // 1. Schedule all audio slices up front first with exact start offsets
     for (uint8_t k = 0; k < count && note_idx < total_notes; k++) {
         uint32_t target_ms      = ((uint32_t)(k + 1) * total_ms) / count;
         uint8_t  start          = note_idx;
@@ -156,17 +138,23 @@ static void start_mario_relay(uint8_t trigger_node) {
         snprintf(audio_cmd, sizeof(audio_cmd), "ms:%u:%u:%lu",
                  (unsigned)start, (unsigned)note_idx, (unsigned long)slice_delay_ms);
         show_on_node(connected[k], audio_cmd);
-        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+    // 2. Trigger wide-screen animation on all connected panels
+    for (uint8_t k = 0; k < count; k++) {
+        char anim_cmd[32];
+        snprintf(anim_cmd, sizeof(anim_cmd), "mario_all:%u:%u:%lu",
+                 (unsigned)k, (unsigned)count, (unsigned long)total_ms);
+        show_on_node(connected[k], anim_cmd);
     }
 
     s_mario_active   = true;
-    s_mario_end_tick = xTaskGetTickCount() + pdMS_TO_TICKS(total_ms);
+    s_mario_end_tick = xTaskGetTickCount() + pdMS_TO_TICKS(total_ms + 250);
 }
 
 // ---- mode switching & DJ/Fart animations ----
 
 static void exit_dj_to_memory(uint8_t last_panel_display[NUM_PANELS]) {
-    stop_mario_relay();
     s_prev_dj_node = 0;
 
     GameManager snap;
@@ -181,7 +169,6 @@ static void exit_dj_to_memory(uint8_t last_panel_display[NUM_PANELS]) {
 }
 
 static void handle_node1_triple_tap(uint8_t last_panel_display[NUM_PANELS]) {
-    stop_mario_relay();
     s_prev_dj_node = 0;
 
     GameManager snap;
@@ -255,7 +242,6 @@ static void handle_dj_tap(const tap_evt_t *evt) {
         static const char *dj_cmds[NUM_PANELS]   = { "dj1", "dj2", "dj3", "dj4", "dj5", "dj6" };
         static const char *fart_cmds[NUM_PANELS] = { "fart1", "fart2", "fart3", "fart4", "fart5", "fart6" };
 
-        stop_mario_relay();
         s_last_single_ms   = now_ms;
         s_last_single_node = node;
         show_on_node(node, s_use_fart_kit ? fart_cmds[node - 1] : dj_cmds[node - 1]);
@@ -268,7 +254,6 @@ static void handle_dj_tap(const tap_evt_t *evt) {
         }
         start_mario_relay(node);
     } else if (node == 2 && evt->tap_type == 3) {
-        stop_mario_relay();
         s_use_fart_kit = !s_use_fart_kit;
         s_prev_dj_node = 0;
         printf("DJ Sound Kit: %s\n", s_use_fart_kit ? "FART" : "DRUMS");
@@ -469,7 +454,7 @@ static void game_task(void *arg) {
     for (;;) {
         drain_status_queue();
 
-        // Check if upfront-scheduled Mario relay finished naturally
+        // Check if non-interruptible Mario relay finished naturally
         if (s_mario_active && (int32_t)(xTaskGetTickCount() - s_mario_end_tick) >= 0) {
             s_mario_active = false;
             s_prev_dj_node = 0;
@@ -481,6 +466,11 @@ static void game_task(void *arg) {
         }
 
         if (xQueueReceive(tap_q, &evt, pdMS_TO_TICKS(40)) == pdTRUE) {
+            // Drain and ignore all taps until the Mario song & animation finish
+            if (s_mario_active) {
+                continue;
+            }
+
             if (evt.from_node == 1 && evt.tap_type == 3) {
                 handle_node1_triple_tap(last_panel_display);
             } else {
