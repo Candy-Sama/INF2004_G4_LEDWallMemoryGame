@@ -110,9 +110,83 @@ int convert_image(const char *path, const char *outdir, FILE *s_file, FILE *h_fi
     return 0;
     }
 
+// Wide strip: height is forced to 8, width is kept. Writes <name>_strip.bin
+// (cols * 8 * 3 bytes, row-major) and its embed lines.
+int convert_strip(const char *path, const char *outdir, FILE *s_file, FILE *h_file){
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    char name[64];
+    snprintf(name, sizeof(name), "%s", base);
+    char *dot = strrchr(name, '.');
+    if (dot) *dot = 0;
+
+    int w, h, ch;
+    unsigned char *px = stbi_load(path, &w, &h, &ch, 3);
+    if (px == NULL){
+        fprintf(stderr, "load failed %s: %s\n", path, stbi_failure_reason());
+        return 1;
+    }
+
+    // Keep aspect ratio if the image is not already 8 pixels tall
+    int cols = (h == 8) ? w : (w * 8 + h / 2) / h;
+    if (cols < 1) cols = 1;
+
+    unsigned char *src = px;
+    unsigned char *tmp = NULL;
+    if (h != 8){
+        tmp = malloc((size_t)cols * 8 * 3);
+        if (tmp == NULL ||
+            stbir_resize(px, w, h, 0, tmp, cols, 8, 0, STBIR_RGB,
+                         STBIR_TYPE_UINT8, STBIR_EDGE_CLAMP,
+                         STBIR_FILTER_POINT_SAMPLE) == NULL){
+            fprintf(stderr, "resize failed %s\n", path);
+            stbi_image_free(px);
+            free(tmp);
+            return 1;
+        }
+        src = tmp;
+    }
+
+    // Same brightness scaling as convert_image()
+    size_t total = (size_t)cols * 8 * 3;
+    unsigned char *out = malloc(total);
+    if (out == NULL){
+        stbi_image_free(px);
+        free(tmp);
+        return 1;
+    }
+    for (size_t i = 0; i < total; i++){
+        out[i] = src[i] * BRIGHTNESS_PERCENT / 100;
+    }
+
+    char bin_path[256];
+    snprintf(bin_path, sizeof(bin_path), "%s/images_bin/%s_strip.bin", outdir, name);
+    FILE *f = fopen(bin_path, "wb");
+    if (f == NULL){
+        fprintf(stderr, "cannot write %s\n", bin_path);
+        stbi_image_free(px);
+        free(tmp);
+        free(out);
+        return 1;
+    }
+    fwrite(out, 1, total, f);
+    fclose(f);
+
+    fprintf(s_file, ".global %s_strip\n%s_strip:\n.incbin \"images_bin/%s_strip.bin\"\n\n",
+            name, name, name);
+    fprintf(h_file, "extern const uint8_t %s_strip[%u];\n#define %s_STRIP_COLS %d\n",
+            name, (unsigned)total, name, cols);
+    fprintf(stderr, "strip %s: %d cols\n", name, cols);
+
+    stbi_image_free(px);
+    free(tmp);
+    free(out);
+    return 0;
+}
+
 int main(int argc, char *argv[]){
     if(argc < 3){
-        fprintf(stderr, "Usage: convert <output_dir> images/a.png images/b.png ...\n");
+        fprintf(stderr, "Usage: convert <output_dir> images/a.png images/b.png ... [-strip anims/x.png ...]\n");
         return 1;
     }
     const char *outdir = argv[1];
@@ -132,8 +206,15 @@ int main(int argc, char *argv[]){
     fprintf(h_file, "#ifndef IMAGEDATA_H\n#define IMAGEDATA_H\n\n#include <stdint.h>\n\n");
 
     int failed = 0;
+    int strip_mode = 0;
     for (int i = 2; i < argc; i++){
-        if (convert_image(argv[i], outdir, s_file, h_file) != 0){
+        if (strcmp(argv[i], "-strip") == 0){
+            strip_mode = 1;          // everything after -strip is a wide strip
+            continue;
+        }
+        int rc = strip_mode ? convert_strip(argv[i], outdir, s_file, h_file)
+                            : convert_image(argv[i], outdir, s_file, h_file);
+        if (rc != 0){
             failed++;
         }
     }

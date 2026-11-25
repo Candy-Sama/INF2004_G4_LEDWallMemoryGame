@@ -23,6 +23,7 @@
 #define BOOT_ONLINE_TIMEOUT_MS      10000
 #define TAP_TIMEOUT_MS              20000
 #define MARIO_VIBRATION_GUARD_MS    600
+#define START_MS_PER_COL          80
 
 #define ANIM_CMD_WIN_1              "win"
 #define ANIM_CMD_WIN_2              "OFF"
@@ -417,9 +418,32 @@ static void arrange_panels(uint8_t online_count) {
     vTaskDelay(pdMS_TO_TICKS(800));
 }
 
+// Sends each connected panel its slice of the START word (same idea as run_mario_relay)
+static void run_start_word(void) {
+    uint8_t mask = game_shared_get_online_mask(&game);
+    uint8_t connected[NUM_PANELS];
+    uint8_t count = 0;
+    for (uint8_t slot = 0; slot < NUM_PANELS; slot++) {
+        uint8_t node = s_slot_to_node[slot];
+        if (node >= 1 && node <= NUM_PANELS && (mask & (1u << (node - 1)))) {
+            connected[count++] = node;
+        }
+    }
+    if (count == 0) { connected[0] = 1; count = 1; }
+
+    for (uint8_t k = 0; k < count; k++) {
+        char cmd[32];
+        snprintf(cmd, sizeof(cmd), "start_all:%u:%u:%u",
+                 (unsigned)k, (unsigned)count, (unsigned)START_MS_PER_COL);
+        show_on_node(connected[k], cmd);
+        vTaskDelay(pdMS_TO_TICKS(15));
+    }
+}
+
 static void begin_round(void) {
     s_started = false;
     send_setup(SETUP_OP_START, 0);
+    run_start_word();
     vTaskDelay(pdMS_TO_TICKS(START_HOLD_MS + 500));
     xQueueReset(tap_q);
     game_begin();

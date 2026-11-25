@@ -14,6 +14,9 @@
 #include "start_word.h"
 #include "faults.h"
 #include "wire_format.h"
+#include "pico/stdlib.h"
+#include "hardware/gpio.h"
+#include "clock_sync.h"
 
 #define DISPLAY_TASK_PRIORITY 4
 #define DISPLAY_TASK_STACK    768
@@ -21,13 +24,18 @@
 #define SLOT_UNKNOWN          0xFF
 #define ANIM_FRAME_MS         30
 #define ANIM_MAX_BRIGHTNESS   25   // 20% of 255 max LED channel brightness
+#ifndef WALL_PANELS
+#define WALL_PANELS        4      // number of panels in the wall (change if you add boards)
+#endif
+#define FRAME_TOGGLE_GPIO  21     // logic-analyser pin: flips on every column step
 
 typedef enum {
     CMD_IMAGE,
     CMD_COLOUR,
     CMD_REDRAW,
     CMD_START,
-    CMD_ANIM
+    CMD_ANIM,
+    CMD_STRIP
 } cmd_kind_t;
 
 typedef enum {
@@ -35,7 +43,8 @@ typedef enum {
     ANIM_TX_OUT,
     ANIM_TX_PASS,
     ANIM_TX_IN,
-    ANIM_MARIO
+    ANIM_MARIO,
+    ANIM_START_WORD
 } anim_type_t;
 
 typedef struct {
@@ -50,6 +59,9 @@ typedef struct {
     uint8_t        slice_idx;    // 0 .. total_slices - 1
     uint8_t        total_slices; // number of active relay panels
     uint32_t       duration_ms;  // full relay playback duration in ms
+    uint16_t       strip_cols;       // CMD_STRIP: strip width in columns
+    uint16_t       ms_per_col;       // CMD_STRIP: scroll speed
+    uint32_t       start_master_us;  // CMD_STRIP: shared-clock start time
 } display_cmd_t;
 
 static QueueHandle_t    display_q;
@@ -147,6 +159,25 @@ void display_anim_mario(uint8_t slice_idx, uint8_t total_slices, uint32_t durati
         .slice_idx    = slice_idx,
         .total_slices = (total_slices > 0) ? total_slices : 1,
         .duration_ms  = (duration_ms > 0) ? duration_ms : 1000
+    };
+    send_cmd(cmd);
+}
+
+void display_anim_start_word(uint8_t slice_idx, uint8_t total_slices, uint16_t ms_per_col) {
+    display_cmd_t cmd = {
+        .kind         = CMD_ANIM,
+        .anim_type    = ANIM_START_WORD,
+        .slice_idx    = slice_idx,
+        .total_slices = (total_slices > 0) ? total_slices : 1,
+        .ms_per_col   = (ms_per_col > 0) ? ms_per_col : 80
+    };
+    send_cmd(cmd);
+}
+
+void display_play_strip(const uint8_t *strip, uint16_t cols, uint16_t ms_per_col, uint32_t start_master_us) {
+    display_cmd_t cmd = {
+        .kind = CMD_STRIP, .image = strip, .strip_cols = cols,
+        .ms_per_col = ms_per_col, .start_master_us = start_master_us
     };
     send_cmd(cmd);
 }
@@ -378,12 +409,32 @@ static bool render_mario_slice(uint8_t tile[192], const display_cmd_t *anim, uin
     return true;
 }
 
+// START word scrolling across total_slices panels. This panel draws only its own 8 columns.
+static bool render_start_slice(uint8_t tile[192], const display_cmd_t *anim, uint32_t elapsed_ms) {
+    uint32_t per = anim->ms_per_col ? anim->ms_per_col : 80;
+    int W   = (int)anim->total_slices * 8;
+    int off = (int)(elapsed_ms / per) - W;       // strip column at the wall's left edge
+    if (off >= START_STRIP_COLS) return false;   // word has left the wall
+    int x0 = (int)anim->slice_idx * 8;
+    for (int y = 0; y < 8; y++) {
+        for (int x = 0; x < 8; x++) {
+            int sc = x0 + x + off;
+            if (sc < 0 || sc >= START_STRIP_COLS) continue;
+            memcpy(&tile[(y * 8 + x) * 3], &START_strip[(y * START_STRIP_COLS + sc) * 3], 3);
+        }
+    }
+    return true;
+}
+
 // Renders one 8x8 RGB frame into tile[192]. Returns true while animation is still active.
 static bool render_anim_frame(uint8_t tile[192], const display_cmd_t *anim, uint32_t elapsed_ms) {
     memset(tile, 0, 192);
 
     if (anim->anim_type == ANIM_MARIO) {
         return render_mario_slice(tile, anim, elapsed_ms);
+    }
+    if (anim->anim_type == ANIM_START_WORD) {
+        return render_start_slice(tile, anim, elapsed_ms);
     }
 
     uint8_t c_from[3], c_to[3];
@@ -477,30 +528,89 @@ static bool render_anim_frame(uint8_t tile[192], const display_cmd_t *anim, uint
     return true;
 }
 
+// Slot for the strip. Does not use current_slot() because that clamps to START_PANELS.
+static uint8_t strip_slot(void) {
+    if (s_slot != SLOT_UNKNOWN) return s_slot;
+    int id = identity_node_id();
+    return (id >= 1) ? (uint8_t)(id - 1) : 0;
+}
+
+// Cut this panel's 8 columns out of the wide strip. 'off' = strip column at the wall's left edge.
+static void strip_tile(uint8_t tile[192], const uint8_t *strip, int cols, int off) {
+    bool vertical = (s_rotation & 1) != 0;
+    int place = (s_rotation == 0 || s_rotation == 3) ? strip_slot()
+                                                     : (WALL_PANELS - 1 - strip_slot());
+    memset(tile, 0, 192);
+    for (int y = 0; y < 8; y++) {
+        for (int x = 0; x < 8; x++) {
+            int along  = place * 8 + (vertical ? y : x);
+            int across = vertical ? x : y;
+            int sc = along + off;
+            if (sc < 0 || sc >= cols) continue;          // outside the strip = black
+            memcpy(&tile[(y * 8 + x) * 3], &strip[(across * cols + sc) * 3], 3);
+        }
+    }
+}
+
+// Which column step are we on, according to the SHARED clock?
+// Returns -1 before the start (or if unsynced). *us_to_next = microseconds until the next step.
+static int32_t strip_step(const display_cmd_t *s, uint32_t *us_to_next) {
+    uint32_t m;
+    *us_to_next = 20000;
+    if (!clock_sync_now_master_us(&m)) return -1;
+    int32_t since = (int32_t)(m - s->start_master_us);
+    if (since < 0) { *us_to_next = (uint32_t)(-since); return -1; }
+    uint32_t per = (uint32_t)s->ms_per_col * 1000u;
+    *us_to_next = per - ((uint32_t)since % per);
+    return (int32_t)((uint32_t)since / per);
+}
+
 static void display_task(void *arg) {
     (void)arg;
     ledmatrix_init();
 
     static uint8_t tile[192];
+    static display_cmd_t strip;
     display_cmd_t cmd = {0}, incoming;
-    bool have_cmd = false, start_on = false, anim_active = false;
+    bool have_cmd = false, start_on = false, anim_active = false, strip_active = false;
     TickType_t start_end = 0, anim_start = 0;
+    int32_t last_step = -1;
 
     for (;;) {
         TickType_t wait = (start_on || anim_active)
                         ? pdMS_TO_TICKS(ANIM_FRAME_MS)
                         : pdMS_TO_TICKS(500);
 
-        if (xQueueReceive(display_q, &incoming, wait) == pdTRUE) {
-            if (incoming.kind == CMD_START) {
+        // Strip playback: sleep until ~1.5 ms before the next column boundary of the shared clock
+        uint32_t t0 = time_us_32(), us_next = 0;
+        if (strip_active) {
+            (void)strip_step(&strip, &us_next);
+            uint32_t sleep_us = (us_next > 2000) ? (us_next - 1500) : 0;
+            if (sleep_us > 100000) sleep_us = 100000;
+            wait = pdMS_TO_TICKS(sleep_us / 1000);
+        }
+
+        BaseType_t got = xQueueReceive(display_q, &incoming, wait);
+        if (got == pdTRUE) {
+            if (incoming.kind == CMD_STRIP) {
+                strip        = incoming;
+                strip_active = true;
+                last_step    = -1;
+                start_on     = false;
+                anim_active  = false;
+                have_cmd     = false;
+            } else if (incoming.kind == CMD_START) {
+                strip_active = false;
                 start_on  = true;
                 start_end = xTaskGetTickCount() + pdMS_TO_TICKS(START_HOLD_MS);
             } else if (incoming.kind == CMD_ANIM) {
+                strip_active = false;
                 cmd         = incoming;
                 have_cmd    = true;
                 anim_active = true;
                 anim_start  = xTaskGetTickCount();
             } else if (incoming.kind != CMD_REDRAW) {
+                strip_active = false;
                 cmd         = incoming;
                 have_cmd    = true;
                 anim_active = false;
@@ -516,6 +626,34 @@ static void display_task(void *arg) {
             taskENTER_CRITICAL();
             show_image_rgb_rotated(tile, s_rotation);
             taskEXIT_CRITICAL();
+            continue;
+        }
+
+        if (strip_active) {
+            if (got == pdFALSE) {                         // timed out: a boundary is close
+                uint32_t until = t0 + us_next;
+                if ((uint32_t)(until - time_us_32()) < 3000) {
+                    while ((int32_t)(time_us_32() - until) < 0) tight_loop_contents();
+                }
+            }
+            uint32_t dummy;
+            int32_t step = strip_step(&strip, &dummy);
+            if (step >= 0 && step != last_step) {
+                int off = step - WALL_PANELS * 8;         // step 0: word fully off the right edge
+                if (off >= (int)strip.strip_cols) {       // word has left the wall: finished
+                    strip_active = false;
+                    taskENTER_CRITICAL();
+                    ledmatrix_fill(0, 0, 0);
+                    taskEXIT_CRITICAL();
+                    continue;
+                }
+                strip_tile(tile, strip.image, strip.strip_cols, off);
+                gpio_xor_mask(1u << FRAME_TOGGLE_GPIO);   // evidence: one edge per frame change
+                taskENTER_CRITICAL();
+                show_image_rgb_rotated(tile, s_rotation);
+                taskEXIT_CRITICAL();
+                last_step = step;
+            }
             continue;
         }
 
@@ -545,8 +683,21 @@ static void display_task(void *arg) {
 }
 
 bool display_start(void) {
+    gpio_init(FRAME_TOGGLE_GPIO);
+    gpio_set_dir(FRAME_TOGGLE_GPIO, GPIO_OUT);
     display_q = xQueueCreate(8, sizeof(display_cmd_t));
     if (!display_q) return false;
     return xTaskCreate(display_task, "display", DISPLAY_TASK_STACK, NULL,
                        DISPLAY_TASK_PRIORITY, NULL) == pdPASS;
+}
+
+// Strong override of the weak hook in clock_sync.c. Called at the scheduled shared-clock instant.
+void anim_on_play(uint8_t anim_id, uint8_t slot) {
+    (void)slot;   // we use s_slot (set during arrange) instead
+    if (anim_id == 0) {                                   // anim A = scrolling START
+        display_play_strip(START_strip, START_STRIP_COLS, 80, clock_sync_play_start_us());
+    } else {                                              // B..D keep the old colour flash
+        static const uint8_t c[4][3] = { {12,0,0}, {0,12,0}, {0,0,12}, {12,10,0} };
+        display_show_colour(c[anim_id & 3][0], c[anim_id & 3][1], c[anim_id & 3][2]);
+    }
 }

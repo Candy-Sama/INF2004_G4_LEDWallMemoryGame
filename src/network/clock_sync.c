@@ -34,6 +34,7 @@ static uint32_t     s_ticks_missed;
 static bool         s_have_last_play;
 static uint8_t      s_last_play_seq;
 static uint32_t     s_last_play_start;
+static volatile uint32_t s_play_start_master_us;
 
 #define LOG(...) do { printf("[SYNC] n=%d ", identity_node_id()); printf(__VA_ARGS__); printf("\n"); } while (0)
 
@@ -52,6 +53,15 @@ bool clock_sync_is_synced(void) {
     uint32_t off;
     return get_offset(time_us_32(), &off);
 }
+
+bool clock_sync_now_master_us(uint32_t *out_master_us) {
+    uint32_t now = time_us_32(), off;
+    if (!get_offset(now, &off)) return false;
+    *out_master_us = now - off;          /* local time -> master time */
+    return true;
+}
+
+uint32_t clock_sync_play_start_us(void) { return s_play_start_master_us; }
 
 /* ------------------------------------------------- hook (override me) */
 
@@ -111,11 +121,11 @@ static void handle_play(const uint8_t *p, size_t len, uint32_t rx_us) {
     if (xQueueSend(s_play_q, &e, 0) != pdTRUE) LOG("PLAY_QUEUE_FULL seq=%u dropped", e.seq);
 }
 
-static void handle_req(const uint8_t *p, size_t len) {
-    if (!IS_SYNC_MASTER) return;                         /* only the clock master stamps start times */
+/* Master only: stamp a start time delay_ms from now and broadcast it. Shared by the PC request
+ * path (handle_req) and by in-firmware triggers such as the game START. Non-blocking. */
+bool clock_sync_request_play(uint8_t anim, uint16_t delay_ms) {
+    if (!IS_SYNC_MASTER) return false;
     static uint8_t seq;
-    uint8_t anim; uint16_t delay_ms;
-    if (!wire_req_decode(p, len, &anim, &delay_ms)) { LOG("REQ_BAD len=%u", (unsigned)len); return; }
     if (delay_ms < SYNC_MIN_LEAD_MS) { LOG("REQ delay %u ms too short, using %d", delay_ms, SYNC_MIN_LEAD_MS); delay_ms = SYNC_MIN_LEAD_MS; }
     if (delay_ms > WIRE_REQ_DELAY_MAX_MS) delay_ms = WIRE_REQ_DELAY_MAX_MS;
 
@@ -125,9 +135,17 @@ static void handle_req(const uint8_t *p, size_t len) {
     if (net_publish(MQTT_SYNC_PLAY_TOPIC, out, sizeof out, false)) {
         LOG("REQ id=%c delay_ms=%u -> PLAY seq=%u start_master_us=%lu", 'A' + anim, delay_ms, seq, (unsigned long)start);
         seq = (uint8_t)((seq + 1) & 0xF);
-    } else {
-        LOG("REQ publish failed (queue full)");
+        return true;
     }
+    LOG("REQ publish failed (queue full)");
+    return false;
+}
+
+static void handle_req(const uint8_t *p, size_t len) {
+    if (!IS_SYNC_MASTER) return;                         /* only the clock master stamps start times */
+    uint8_t anim; uint16_t delay_ms;
+    if (!wire_req_decode(p, len, &anim, &delay_ms)) { LOG("REQ_BAD len=%u", (unsigned)len); return; }
+    clock_sync_request_play(anim, delay_ms);
 }
 
 static void on_sync(const char *topic, const uint8_t *p, size_t len) {
@@ -187,6 +205,7 @@ static void run_play(const play_evt_t *e) {
     while ((int32_t)(time_us_32() - target) < 0) tight_loop_contents();
     uint32_t fired = time_us_32();
     pulse_high();
+    s_play_start_master_us = e->start_master_us;
     anim_on_play(e->anim, (uint8_t)(identity_node_id() > 0 ? identity_node_id() - 1 : 0));
 
     LOG("FIRE seq=%u id=%c start_master_us=%lu fired_master_us=%lu err_us=%ld fired_us=%lu",

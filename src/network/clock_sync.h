@@ -8,7 +8,7 @@
  * makes T mean the same instant on every node. Protocol: docs/MQTT_PROTOCOL.md s9. */
 
 #ifndef SYNC_MASTER_NODE
-#define SYNC_MASTER_NODE      4          /* node that publishes ticks and stamps start times. Must be a node that
+#define SYNC_MASTER_NODE      1          /* node that publishes ticks and stamps start times. Must be a node that
                                             actually exists: with boards 4 and 5 only, set 4 (e.g. -DSYNC_MASTER_NODE=4) */
 #endif
 #define IS_SYNC_MASTER        (identity_node_id() == SYNC_MASTER_NODE)
@@ -32,6 +32,9 @@
 bool     clock_sync_start(void);         /* call before net_start(); registers its own net handler */
 void     clock_sync_poll(void);          /* net_task only: the clock master publishes its tick here */
 bool     clock_sync_is_synced(void);
+bool     clock_sync_now_master_us(uint32_t *out_master_us);  /* shared-clock "now"; false if not synced */
+uint32_t clock_sync_play_start_us(void);                     /* master time the current play was scheduled for */
+bool     clock_sync_request_play(uint8_t anim_id, uint16_t delay_ms);   /* master only: stamp a start time and broadcast it */
 
 /* Weak hook. Another module (the animation owner) overrides it by defining a normal
  * function with this name. anim_id 0..3 = A..D; slot = this node's grid position

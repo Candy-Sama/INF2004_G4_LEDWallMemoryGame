@@ -39,7 +39,7 @@ static inline bool grid_slice_tile(const uint8_t *wide, uint8_t tiles, uint8_t s
         return false;
     }
     const size_t row_bytes = (size_t)tiles * GRID_TILE_PX * 3;
-    for (int y = 0; y < GRID_TITLE_BYTES; y++){
+    for (int y = 0; y < GRID_TILE_PX; y++){
         memcpy(&out[y * GRID_TILE_PX * 3], 
             &wide[y * row_bytes + (size_t)slot * GRID_TILE_PX * 3],
             GRID_TILE_PX * 3);

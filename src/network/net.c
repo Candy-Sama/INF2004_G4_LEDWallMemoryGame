@@ -320,6 +320,88 @@ static void apply_received_command(void) {
         memcpy(buf, message.payload, n);
         buf[n] = '\0';
         execute_node_command(buf, n);
+        if (message.length == 7 && memcmp(message.payload, "diamond", 7) == 0) {
+            display_show_image(diamondCard_bin);
+            printf("LED command applied: Diamond\n");
+        } else if (message.length == 6 && memcmp(message.payload, "Clover", 6) == 0) {
+            display_show_image(cloverCard_bin);
+            printf("LED command applied: Clover\n");
+        } else if (message.length == 5 && memcmp(message.payload, "spade", 5) == 0) {
+            display_show_image(spadeCard_bin);
+            printf("LED command applied: Spade\n");
+        } else if (message.length == 3 && memcmp(message.payload, "OFF", 3) == 0) {
+            display_show_colour(0, 0, 0);
+            printf("LED command applied: OFF\n");
+        } else if (message.length == 3 && memcmp(message.payload, "win", 3) == 0) {
+            display_show_image(winSTAR_bin);
+            printf("LED command applied: winSTAR\n");
+        } else if (message.length == 4 && memcmp(message.payload, "lose", 4) == 0) {
+            display_show_image(loseREJECT_bin);
+            printf("LED command applied: loseREJECT\n");
+        } else if (message.length == 3 && memcmp(message.payload, "dj", 2) == 0 &&
+                message.payload[2] >= '1' && message.payload[2] <= '6') {
+            uint8_t pad = (uint8_t)(message.payload[2] - '1');
+            static const buzz_id_t dj_sounds[6] = {
+                BUZZ_DJ_1, BUZZ_DJ_2, BUZZ_DJ_3, BUZZ_DJ_4, BUZZ_DJ_5, BUZZ_DJ_6
+            };
+            buzzer_play(dj_sounds[pad]);
+            printf("DJ command applied: pad %u\n", (unsigned)(pad + 1));
+        } else if (message.length == 5 && memcmp(message.payload, "fart", 4) == 0 &&
+                message.payload[4] >= '1' && message.payload[4] <= '6') {
+            uint8_t pad = (uint8_t)(message.payload[4] - '1');
+            static const buzz_id_t fart_sounds[6] = {
+                BUZZ_FART_1, BUZZ_FART_2, BUZZ_FART_3, BUZZ_FART_4, BUZZ_FART_5, BUZZ_FART_6
+            };
+            buzzer_play(fart_sounds[pad]);
+            printf("Fart command applied: pad %u\n", (unsigned)(pad + 1));
+        } else if (message.length > 5 && message.length < 32 &&
+                   (memcmp(message.payload, "burst:", 6) == 0 ||
+                    memcmp(message.payload, "tx_out:", 7) == 0 ||
+                    memcmp(message.payload, "tx_pass:", 8) == 0 ||
+                    memcmp(message.payload, "tx_in:", 6) == 0 ||
+                    memcmp(message.payload, "mario_all:", 10) == 0 ||
+                    memcmp(message.payload, "start_all:", 10) == 0)) {
+            char buf[32];
+            memcpy(buf, message.payload, message.length);
+            buf[message.length] = '\0';
+
+            unsigned a = 0, b = 0, kit = 0;
+            unsigned long total_ms = 30000;
+            char dir = 'R';
+            if (sscanf(buf, "burst:%u:%u", &a, &kit) == 2) {
+                display_anim_burst((uint8_t)a, (uint8_t)kit);
+                printf("Anim applied: burst node %u (kit %u)\n", a, kit);
+            } else if (sscanf(buf, "tx_out:%u:%u:%c", &a, &kit, &dir) == 3) {
+                display_anim_tx_out((uint8_t)a, (uint8_t)kit, dir == 'R');
+                printf("Anim applied: tx_out from %u (kit %u, %c)\n", a, kit, dir);
+            } else if (sscanf(buf, "tx_pass:%u:%u:%c", &a, &kit, &dir) == 3) {
+                display_anim_tx_pass((uint8_t)a, (uint8_t)kit, dir == 'R');
+                printf("Anim applied: tx_pass from %u (kit %u, %c)\n", a, kit, dir);
+            } else if (sscanf(buf, "tx_in:%u:%u:%u:%c", &a, &b, &kit, &dir) == 4) {
+                display_anim_tx_in((uint8_t)a, (uint8_t)b, (uint8_t)kit, dir == 'R');
+                printf("Anim applied: tx_in %u -> %u (kit %u, %c)\n", a, b, kit, dir);
+            } else if (sscanf(buf, "mario_all:%u:%u:%lu", &a, &b, &total_ms) == 3) {
+                display_anim_mario((uint8_t)a, (uint8_t)b, (uint32_t)total_ms);
+                printf("Wide Mario anim applied: slice %u/%u (%lu ms)\n", a + 1, b, total_ms);
+            } else if (sscanf(buf, "start_all:%u:%u:%u", &a, &b, &kit) == 3) {
+                display_anim_start_word((uint8_t)a, (uint8_t)b, (uint16_t)kit);
+                printf("START word: slice %u/%u (%u ms/col)\n", a + 1, b, kit);
+            }
+        } else if (message.length > 3 && memcmp(message.payload, "ms:", 3) == 0) {
+            char buf[32];
+            size_t n = message.length < sizeof(buf) - 1 ? message.length : sizeof(buf) - 1;
+            memcpy(buf, message.payload, n);
+            buf[n] = '\0';
+
+            unsigned start = 0, end = 0;
+            if (sscanf(buf + 3, "%u:%u", &start, &end) == 2) {
+                buzzer_play_mario_slice((uint8_t)start, (uint8_t)end);
+                printf("Mario audio slice applied: notes %u..%u\n", start, end);
+            }
+        } else {
+            printf("Demo: unrecognised payload on %s (%u bytes).\n",
+                message.topic, (unsigned)message.length);
+        }
     }
 
     static uint32_t previous_drops;

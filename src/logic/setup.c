@@ -8,6 +8,7 @@
 #include "buzzer.h"
 #include "display.h"
 #include "game_task.h"
+#include "clock_sync.h"
 
 #define SETUP_TASK_STACK      768
 #define SETUP_TASK_PRIORITY   2
@@ -39,7 +40,6 @@ static void run_action(const setup_msg_t *m) {
         }
     } else if (m->op == SETUP_OP_START) {
         buzzer_play(BUZZ_JINGLE);
-        display_show_start_slice();
         printf("Setup: START\n");
     }
 }

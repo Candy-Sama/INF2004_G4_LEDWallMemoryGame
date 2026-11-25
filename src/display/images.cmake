@@ -8,6 +8,7 @@ ExternalProject_Add(image_converter_host
     SOURCE_DIR       ${CONVERTER_SRC}
     BINARY_DIR       ${CONVERTER_BIN}
     CMAKE_ARGS       -DCMAKE_BUILD_TYPE=Release
+    BUILD_ALWAYS     1
     INSTALL_COMMAND  ""
 )
 if(WIN32)
@@ -19,15 +20,20 @@ endif()
 
 file(GLOB IMAGE_PNGS CONFIGURE_DEPENDS ${CONVERTER_SRC}/images/*.png)
 list(SORT IMAGE_PNGS)
+
+# Wide animation strips (8 px tall, any width) -> <name>_strip / <name>_STRIP_COLS
+file(GLOB STRIP_PNGS CONFIGURE_DEPENDS ${CONVERTER_SRC}/anims/*.png)
+list(SORT STRIP_PNGS)
+
 file(MAKE_DIRECTORY ${IMAGE_OUT}/images_bin)
 
 add_custom_command(
     OUTPUT  ${IMAGE_OUT}/imagedata.h ${IMAGE_OUT}/imagedata_bin.S
     COMMAND ${CMAKE_COMMAND} -E remove_directory ${IMAGE_OUT}/images_bin
     COMMAND ${CMAKE_COMMAND} -E make_directory ${IMAGE_OUT}/images_bin
-    COMMAND ${CONVERTER_EXE} ${IMAGE_OUT} ${IMAGE_PNGS}
-    DEPENDS image_converter_host ${IMAGE_PNGS}
-    COMMENT "Converting PNG images to 8x8 RGB data"
+    COMMAND ${CONVERTER_EXE} ${IMAGE_OUT} ${IMAGE_PNGS} -strip ${STRIP_PNGS}
+    DEPENDS image_converter_host ${IMAGE_PNGS} ${STRIP_PNGS}
+    COMMENT "Converting PNG images to 8x8 RGB data and wide strips"
 )
 add_custom_target(generate_images
     DEPENDS ${IMAGE_OUT}/imagedata.h ${IMAGE_OUT}/imagedata_bin.S)

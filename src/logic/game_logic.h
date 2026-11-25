@@ -7,7 +7,7 @@
 #include "FreeRTOS.h"
 #include "semphr.h"
 
-#define NUM_PANELS    6
+#define NUM_PANELS    4
 #define NUM_PAIRS     2                              // 2 pairs = 4 panels (set to 3 for 6 panels)
 #define ACTIVE_PANELS (NUM_PAIRS * 2)
 #define NO_SELECTION  7                              // sentinel for 3-bit unsigned selection fields
