@@ -20,7 +20,6 @@
 #define GAME_TEST_AUTOSTART         0
 #define GAME_ARRANGE_AT_BOOT        1
 #define GAME_REARRANGE_EACH_ROUND   0
-#define BOOT_ONLINE_TIMEOUT_MS      10000
 #define TAP_TIMEOUT_MS              20000
 #define MARIO_VIBRATION_GUARD_MS    600
 #define START_MS_PER_COL          80
@@ -323,25 +322,24 @@ static void send_setup(uint8_t op, uint8_t arg) {
     net_publish(MQTT_SETUP_TOPIC, msg, sizeof(msg), false);
 }
 
+// Waits until EVERY active panel is online. Proceeding early (the old 10 s timeout) made a slow
+// node get backfilled into the LAST slot and left out of the START word.
 static uint8_t wait_for_panels_online(void) {
-    TickType_t start = xTaskGetTickCount();
     drain_status_queue();
     uint8_t online = game_shared_online_count(&game);
+    uint8_t last_shown = 0xFF;
+    TickType_t last_print = xTaskGetTickCount();
 
     while (online < ACTIVE_PANELS) {
-        if ((xTaskGetTickCount() - start) >= pdMS_TO_TICKS(BOOT_ONLINE_TIMEOUT_MS)) {
-            if (online > 0) {
-                printf("Boot: timeout waiting for %u panels; continuing with %u online\n",
-                       (unsigned)ACTIVE_PANELS, (unsigned)online);
-                break;
-            }
-            printf("Boot: still 0/%u panels online - check MQTT broker IP & Mosquitto!\n",
-                   (unsigned)ACTIVE_PANELS);
-            start = xTaskGetTickCount();
+        TickType_t now = xTaskGetTickCount();
+        if (online != last_shown || (now - last_print) >= pdMS_TO_TICKS(5000)) {
+            printf("Boot: waiting for %u panels online (%u/%u ready, mask 0x%02X)...\n",
+                   (unsigned)ACTIVE_PANELS, (unsigned)online, (unsigned)ACTIVE_PANELS,
+                   (unsigned)game_shared_get_online_mask(&game));
+            last_shown = online;
+            last_print = now;
         }
-        printf("Boot: waiting for %u panels online (%u/%u ready)...\n",
-               (unsigned)ACTIVE_PANELS, (unsigned)online, (unsigned)ACTIVE_PANELS);
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(250));
         drain_status_queue();
         online = game_shared_online_count(&game);
     }
@@ -355,6 +353,7 @@ static void arrange_panels(uint8_t online_count) {
     uint8_t placed_mask = 0;
     uint8_t count = 0;
 
+    vTaskDelay(pdMS_TO_TICKS(1500));   // settle: ignore bumps from plugging boards in
     xQueueReset(tap_q);
     send_setup(SETUP_OP_ARRANGE, 0);
     printf("Arrange: tap %u online panel(s) in your desired sequence\n", (unsigned)target);

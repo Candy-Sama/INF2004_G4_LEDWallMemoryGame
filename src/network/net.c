@@ -21,6 +21,7 @@
 #include "imu_orientation.h"
 #include "node_registry.h"
 #include "clock_sync.h"
+#include "fatal.h"
 
 #define NET_TASK_PRIORITY    2
 #define NET_TASK_STACK       2048
@@ -184,8 +185,7 @@ static void handle_join_request(const mqtt_message_t *message) {
 
 static void join_grid(const char *client_id) {
     if (!mqtt_subscribe_topic(identity_assign_topic())) {
-        printf("Could not register the assign topic.\n");
-        vTaskDelete(NULL);
+        fatal_reboot("could not register the assign topic");
     }
     TickType_t next_join = xTaskGetTickCount();
 
@@ -365,14 +365,13 @@ static void net_task(void *arg) {
     if (!mqtt_configure_will(identity_status_topic(), "offline", 10) ||
         !mqtt_subscribe_topic(identity_command_topic()) ||
         (IS_REGISTRY_MASTER && !mqtt_subscribe_topic(MQTT_JOIN_TOPIC))) {
-        printf("MQTT topic registration failed.\n");
-        vTaskDelete(NULL);
+        fatal_reboot("MQTT topic registration failed (subscription limit?)");
     }
 
     for (size_t i = 0; i < s_handler_count; i++) {
         if (!mqtt_subscribe_topic(s_handlers[i].filter)) {
             printf("Could not register %s.\n", s_handlers[i].filter);
-            vTaskDelete(NULL);
+            fatal_reboot("MQTT handler subscription failed (raise MQTT_MAX_SUBSCRIPTIONS)");
         }
     }
 

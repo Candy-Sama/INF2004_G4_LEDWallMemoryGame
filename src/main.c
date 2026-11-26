@@ -13,6 +13,12 @@
 #include "buzzer.h"
 #include "setup.h"
 #include "clock_sync.h"
+#include "fatal.h"
+#include "game_logic.h"
+#include "board_map.h"
+
+_Static_assert(BOARD_MAP_COUNT >= ACTIVE_PANELS,
+               "BOARD_MAP must list every active panel (the join flow is only a fallback)");
 
 #ifndef WAIT_FOR_USB
 #define WAIT_FOR_USB 0
@@ -21,14 +27,13 @@
 /* ------------------------------------------------------- FreeRTOS hooks */
 
 void vApplicationMallocFailedHook(void) {
-    printf("FATAL: FreeRTOS heap exhausted (raise configTOTAL_HEAP_SIZE).\n");
-    for (;;) {}
+    fatal_reboot_now("FreeRTOS heap exhausted (raise configTOTAL_HEAP_SIZE)");
 }
 
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name) {
     (void)task;
-    printf("FATAL: stack overflow in task '%s' (raise its stack size).\n", name);
-    for (;;) {}
+    printf("stack overflow in task '%s' (raise its stack size)\n", name);
+    fatal_reboot_now("stack overflow");
 }
 
 /* ------------------------------------------------------------------ main */
@@ -44,8 +49,7 @@ int main(void) {
 #endif
 
     if (!identity_init()) {                      // fails only if BOARD_MAP itself is invalid
-        printf("identity failed (check BOARD_MAP)\n");
-        for (;;) {}
+        fatal_reboot("identity failed (check BOARD_MAP)");
     }
 
     bool assigned = identity_is_assigned();
@@ -60,16 +64,16 @@ int main(void) {
 
     srand(get_rand_32());
 
-    if (!display_start()) { printf("display failed\n"); for (;;) {} }
-    if (assigned && IS_GAME_MASTER && !game_start()) { printf("game failed\n"); for (;;) {} }
+    if (!display_start()) { fatal_reboot("display failed"); }
+    if (assigned && IS_GAME_MASTER && !game_start()) { fatal_reboot("game failed"); }
 
-    if (!buzzer_start()) { printf("buzzer failed\n"); for (;;) {} }     
-    if (assigned && !setup_start()) { printf("setup failed\n"); for (;;) {} }  
+    if (!buzzer_start()) { fatal_reboot("buzzer failed"); }     
+    if (!setup_start()) { fatal_reboot("setup failed"); }  
 
-     if (!clock_sync_start()) { printf("clock sync failed\n"); for (;;) {} }   // before net_start()
+     if (!clock_sync_start()) { fatal_reboot("clock sync failed"); }   // before net_start()
 
-    if (!sensor_start()) { printf("sensor failed\n"); for (;;) {} }   // before net_start()
-    if (!net_start())    { printf("net failed\n");    for (;;) {} }
+    if (!sensor_start()) { fatal_reboot("sensor failed"); }   // before net_start()
+    if (!net_start())    { fatal_reboot("net failed"); }
 
     if (!assigned) display_show_colour(12, 6, 0);   // dim orange until a number arrives
 

@@ -22,7 +22,7 @@
 #define SYNC_LATE_TOL_US      20000      /* started this long ago or less: still play; older: skip + log */
 #define SYNC_MAX_LEAD_US      65000000   /* refuse a start further away than this */
 #define SYNC_SPIN_US          1500       /* sleep until this close, then busy-wait */
-#define SYNC_LOG_TICKS        1          /* 1 = print every tick (evidence runs), 0 = quiet */
+#define SYNC_LOG_TICKS        0          /* 1 = print every tick (evidence runs), 0 = quiet */
 
 #ifndef SYNC_PULSE_GPIO
 #define SYNC_PULSE_GPIO       22         /* 5 ms pulse at fire time for a logic analyser; -1 = off.
