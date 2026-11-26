@@ -10,6 +10,7 @@
 #include "motion_detector.h"
 #include "imu_orientation.h"
 #include "display.h"
+#include "fatal.h"
 
 
 #define I2C_PORT i2c0
@@ -17,6 +18,8 @@
 #define I2C_SCL 1
 #define SENSOR_TASK_PRIORITY 3
 #define SENSOR_TASK_STACK    1024
+#define IMU_INIT_ATTEMPTS    5
+#define IMU_INIT_RETRY_MS    500
 
 static QueueHandle_t sensor_event_q;
 static volatile orientation_t s_orientation = ORIENT_UNKNOWN;
@@ -34,10 +37,15 @@ static bool setup_sensor(void) {
 
 static void sensor_task(void *arg) {
     (void)arg;
-    if (!setup_sensor()) {
-        printf("IMU not available; sensor task stopping.\n");
-        vTaskDelete(NULL);
+    bool imu_ok = false;
+    for (int attempt = 1; attempt <= IMU_INIT_ATTEMPTS && !imu_ok; attempt++) {
+        imu_ok = setup_sensor();
+        if (!imu_ok) {
+            printf("IMU init failed (attempt %d/%d)\n", attempt, IMU_INIT_ATTEMPTS);
+            vTaskDelay(pdMS_TO_TICKS(IMU_INIT_RETRY_MS));
+        }
     }
+    if (!imu_ok) fatal_reboot("IMU not responding (check SDA/SCL, power, GND)");
 
     motion_detector_t detector;
     memset(&detector, 0, sizeof(detector));
@@ -105,7 +113,7 @@ static void sensor_task(void *arg) {
         }                                   // end if (result == IMU_NEW_DATA)
         vTaskDelay(pdMS_TO_TICKS(10));
     }                                       // end for (;;)
-}                                           // end sensor_taskdMS_TO_TICKS(10));
+}                                           // end sensor_task
 
 QueueHandle_t sensor_get_event_queue(void) { return sensor_event_q; }
 orientation_t sensor_get_orientation(void) { return s_orientation; }

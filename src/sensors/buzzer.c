@@ -129,8 +129,11 @@ static const sound_t SOUNDS[] = {
 
 static QueueHandle_t buzz_q;
 static uint slice;
-static volatile bool     s_pwm_ready = false;
-static volatile uint32_t s_buzz_gen  = 0;
+static volatile bool s_pwm_ready    = false;
+// Bumped by buzzer_stop(). A request is only valid while its gen still matches, so a
+// stop cancels everything queued or playing BEFORE it, and a play issued AFTER it is
+// never cancelled by it (the old shared abort flag was cleared by the next play).
+static volatile uint32_t s_gen = 0;
 
 uint8_t buzzer_mario_note_count(void) {
     return (uint8_t)COUNT(MARIO_THEME);
@@ -156,33 +159,17 @@ static void tone(uint16_t hz) {
 }
 
 static void play(const note_t *n, size_t count, uint32_t gen) {
-    TickType_t slice_start = xTaskGetTickCount();
-    uint32_t   cum_ms      = 0;
-
     for (size_t i = 0; i < count; i++) {
-        if (s_buzz_gen != gen) break;
-
-        uint32_t dur_ms  = n[i].ms;
-        uint32_t gap_ms  = (n[i].hz > 0 && dur_ms >= 60) ? 15 : 0;
-        uint32_t tone_ms = dur_ms - gap_ms;
-
+        if (s_gen != gen) break;
         tone(n[i].hz);
-        TickType_t tone_end = slice_start + pdMS_TO_TICKS(cum_ms + tone_ms);
-        while (s_buzz_gen == gen && (int32_t)(tone_end - xTaskGetTickCount()) > 0) {
-            TickType_t rem = tone_end - xTaskGetTickCount();
-            vTaskDelay(rem > pdMS_TO_TICKS(20) ? pdMS_TO_TICKS(20) : rem);
+        uint32_t rem = n[i].ms;
+        while (rem > 0 && s_gen == gen) {
+            uint32_t step = (rem > 25) ? 25 : rem;
+            TickType_t ticks = pdMS_TO_TICKS(step);
+            if (ticks == 0) ticks = 1;
+            vTaskDelay(ticks);
+            rem -= step;
         }
-
-        if (gap_ms > 0 && s_buzz_gen == gen) {
-            tone(0);
-            TickType_t note_end = slice_start + pdMS_TO_TICKS(cum_ms + dur_ms);
-            while (s_buzz_gen == gen && (int32_t)(note_end - xTaskGetTickCount()) > 0) {
-                TickType_t rem = note_end - xTaskGetTickCount();
-                vTaskDelay(rem > pdMS_TO_TICKS(20) ? pdMS_TO_TICKS(20) : rem);
-            }
-        }
-
-        cum_ms += dur_ms;
     }
     tone(0);
 }
@@ -202,12 +189,11 @@ static void buzzer_task(void *arg) {
 
         if (req.delay_ms > 0) {
             TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(req.delay_ms);
-            while (s_buzz_gen == req.gen && (int32_t)(deadline - xTaskGetTickCount()) > 0) {
-                TickType_t rem = deadline - xTaskGetTickCount();
-                vTaskDelay(rem > pdMS_TO_TICKS(20) ? pdMS_TO_TICKS(20) : rem);
+            while (s_gen == req.gen && (int32_t)(deadline - xTaskGetTickCount()) > 0) {
+                vTaskDelay(pdMS_TO_TICKS(20));
             }
         }
-        if (s_buzz_gen != req.gen) continue;
+        if (s_gen != req.gen) continue;
 
         if (req.id == BUZZ_MARIO_SLICE) {
             uint8_t total = (uint8_t)COUNT(MARIO_THEME);
@@ -229,14 +215,13 @@ static void buzzer_task(void *arg) {
 }
 
 void buzzer_stop(void) {
-    s_buzz_gen++;
+    __atomic_fetch_add(&s_gen, 1, __ATOMIC_SEQ_CST);
     if (buzz_q) xQueueReset(buzz_q);
     tone(0);
 }
 
 void buzzer_play(buzz_id_t id) {
-    uint32_t gen = ++s_buzz_gen;
-    buzz_req_t req = { .id = (uint8_t)id, .start = 0, .end = 0, .delay_ms = 0, .gen = gen };
+    buzz_req_t req = { .id = (uint8_t)id, .start = 0, .end = 0, .delay_ms = 0, .gen = s_gen };
     if (buzz_q) xQueueSend(buzz_q, &req, 0);
 }
 
@@ -245,13 +230,12 @@ void buzzer_play_mario_slice(uint8_t start_idx, uint8_t end_idx) {
 }
 
 void buzzer_play_mario_slice_delayed(uint8_t start_idx, uint8_t end_idx, uint32_t delay_ms) {
-    uint32_t gen = ++s_buzz_gen;
     buzz_req_t req = {
+        .gen      = s_gen,
         .id       = (uint8_t)BUZZ_MARIO_SLICE,
         .start    = start_idx,
         .end      = end_idx,
-        .delay_ms = delay_ms,
-        .gen      = gen
+        .delay_ms = delay_ms
     };
     if (buzz_q) xQueueSend(buzz_q, &req, 0);
 }

@@ -60,6 +60,7 @@ add_executable(LED_MEMORY_GAME
     src/layout/node_registry.c
     src/network/faults.c
     src/network/clock_sync.c
+    src/system/fatal.c
 )
 
 add_dependencies(LED_MEMORY_GAME generate_images)
@@ -82,6 +83,7 @@ target_include_directories(LED_MEMORY_GAME PRIVATE
                         src/network
                         src/sensors
                         src/layout
+                        src/system
                         ${CMAKE_CURRENT_LIST_DIR}
                         ${IMAGE_OUT}
                 )
@@ -97,6 +99,7 @@ target_link_libraries(LED_MEMORY_GAME
     FreeRTOS-Kernel
     FreeRTOS-Kernel-Heap4
     hardware_pwm
+    hardware_watchdog
 
 
 )
