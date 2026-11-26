@@ -32,11 +32,8 @@ include(pico_sdk_import.cmake)
 # pico_sdk_import.cmake and before project().
 set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/FreeRTOS-Kernel)
 include(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/FreeRTOS_Kernel_import.cmake)
- 
-# Step-1 verification: configure with -DRTOS_SMOKETEST=ON to build the tiny
-# blink/queue test instead of the real application.
-option(RTOS_SMOKETEST "Build FreeRTOS smoke test instead of main.c" OFF)
 
+set(APP_MAIN src/main.c)
 
 project(LED_MEMORY_GAME C CXX ASM)
 
@@ -44,14 +41,6 @@ project(LED_MEMORY_GAME C CXX ASM)
 pico_sdk_init()
 
 include(src/display/images.cmake)
-
-# Add executable. Default name is the project name, version 0.1
-
-if(RTOS_SMOKETEST)
-    set(APP_MAIN src/main_rtos_smoketest.c)
-else()
-    set(APP_MAIN src/main.c)
-endif()
 
 add_executable(LED_MEMORY_GAME 
     ${APP_MAIN}
@@ -68,7 +57,6 @@ add_executable(LED_MEMORY_GAME
     src/sensors/sensor.c
     src/logic/setup.c
     src/sensors/buzzer.c
-    src/layout/node_identity.c
     src/layout/node_registry.c
     src/network/faults.c
     src/network/clock_sync.c
